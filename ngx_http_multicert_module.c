@@ -17,6 +17,8 @@ typedef struct {
 	ngx_ssl_t ssl_ecdsa_sha256;
 	ngx_ssl_t ssl_ecdsa_sha384;
 	ngx_ssl_t ssl_ecdsa_sha512;
+
+	int has_ecdsa_cipher_suite;
 } srv_conf_t;
 
 typedef struct {
@@ -177,6 +179,13 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		}
 	}
 
+	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
+		if (SSL_CIPHER_is_ECDSA(sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i))) {
+			conf->has_ecdsa_cipher_suite = 1;
+			break;
+		}
+	}
+
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
 		if (g_ssl_ctx_exdata_srv_data_index == -1) {
@@ -306,9 +315,11 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
-	if ((conf->ssl_rsa_sha256.ctx || conf->ssl_ecdsa_sha256.ctx
-			|| conf->ssl_rsa_sha384.ctx || conf->ssl_ecdsa_sha384.ctx
-			|| conf->ssl_rsa_sha512.ctx || conf->ssl_ecdsa_sha512.ctx)
+	if (((conf->ssl_rsa_sha256.ctx || conf->ssl_rsa_sha384.ctx || conf->ssl_rsa_sha512.ctx)
+		|| (conf->has_ecdsa_cipher_suite
+			&& (conf->ssl_ecdsa_sha256.ctx
+				|| conf->ssl_ecdsa_sha384.ctx
+				|| conf->ssl_ecdsa_sha512.ctx)))
 		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_signature_algorithms,
 				&sig_algs_ptr, &sig_algs_len)) {
 		has_ecdsa = 0;
@@ -316,9 +327,10 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
 
-		if (conf->ssl_ecdsa_sha256.ctx
-			|| conf->ssl_ecdsa_sha384.ctx
-			|| conf->ssl_ecdsa_sha512.ctx) {
+		if (conf->has_ecdsa_cipher_suite
+			&& (conf->ssl_ecdsa_sha256.ctx
+				|| conf->ssl_ecdsa_sha384.ctx
+				|| conf->ssl_ecdsa_sha512.ctx)) {
 			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
 
 			while (CBS_len(&cipher_suites) != 0) {
