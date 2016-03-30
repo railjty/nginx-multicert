@@ -6,39 +6,32 @@
 
 #include <ngx_keyless_module.h>
 
-typedef enum {
-	ecdsa_only = 0x1,
-	sha2_only = 0x2,
-	ecdsa_sha2 = ecdsa_only|sha2_only
-} cert_qualifier_et;
-
 typedef struct {
 	ngx_array_t *certificate;
 	ngx_array_t *certificate_key;
 
-	ngx_ssl_t *ssl;
-	ngx_ssl_t ssl_ecdsa;
-	ngx_ssl_t ssl_rsa_sha2;
-	ngx_ssl_t ssl_ecdsa_sha2;
+	ngx_ssl_t ssl_rsa;
+	ngx_ssl_t ssl_rsa_sha256;
+	ngx_ssl_t ssl_rsa_sha384;
+	ngx_ssl_t ssl_rsa_sha512;
+	ngx_ssl_t ssl_ecdsa_sha256;
+	ngx_ssl_t ssl_ecdsa_sha384;
+	ngx_ssl_t ssl_ecdsa_sha512;
 } srv_conf_t;
-
-typedef struct {
-	ngx_str_t val;
-	cert_qualifier_et qal;
-} cert_str_st;
 
 typedef struct {
 	ngx_conf_post_handler_pt post_handler;
 
+	ngx_module_t *module;
 	ngx_uint_t offset;
-} ssl_module_default_post_st;
+} ngx_conf_set_first_str_array_post_t;
 
 static void *create_srv_conf(ngx_conf_t *cf);
 static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char *set_opt_qualifier_str(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void *data);
 
-static char *set_ssl_module_default(ngx_conf_t *cf, void *post, void *data);
+static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl);
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
 
@@ -46,25 +39,27 @@ static int g_ssl_ctx_exdata_srv_data_index = -1;
 
 static ngx_str_t ngx_http_ssl_sess_id_ctx = ngx_string("HTTP");
 
-static ssl_module_default_post_st ssl_multicert_post =
-	{ set_ssl_module_default,
+static ngx_conf_set_first_str_array_post_t ssl_multicert_post =
+	{ ngx_conf_set_first_str_array_slot,
+	  &ngx_http_ssl_module,
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate) };
 
-static ssl_module_default_post_st ssl_multicert_key_post =
-	{ set_ssl_module_default,
+static ngx_conf_set_first_str_array_post_t ssl_multicert_key_post =
+	{ ngx_conf_set_first_str_array_slot,
+	  &ngx_http_ssl_module,
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate_key) };
 
 static ngx_command_t module_commands[] = {
 	{ ngx_string("ssl_multicert"),
-	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_1MORE,
-	  set_opt_qualifier_str,
+	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+	  ngx_conf_set_str_array_slot,
 	  NGX_HTTP_SRV_CONF_OFFSET,
 	  offsetof(srv_conf_t, certificate),
 	  &ssl_multicert_post },
 
 	{ ngx_string("ssl_multicert_key"),
-	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_1MORE,
-	  set_opt_qualifier_str,
+	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+	  ngx_conf_set_str_array_slot,
 	  NGX_HTTP_SRV_CONF_OFFSET,
 	  offsetof(srv_conf_t, certificate_key),
 	  &ssl_multicert_key_post },
@@ -122,9 +117,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	srv_conf_t *conf = child;
 
 	ngx_http_ssl_srv_conf_t *ssl;
-	cert_str_st *cert_elt;
-	cert_str_st *key_elt;
-	ngx_ssl_t *new_ssl;
+	ngx_str_t *cert_elt, *key_elt;
+	ngx_ssl_t new_ssl;
 	size_t i;
 	ngx_pool_cleanup_t *cln;
 
@@ -135,8 +129,10 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		return NGX_CONF_OK;
 	}
 
-	if (!conf->certificate || !conf->certificate_key || conf->certificate->nelts != conf->certificate_key->nelts) {
-		ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "must have same number of ssl_multicert and ssl_multicert_key directives");
+	if (!conf->certificate || !conf->certificate_key
+		|| conf->certificate->nelts != conf->certificate_key->nelts) {
+		ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+			"must have same number of ssl_multicert and ssl_multicert_key directives");
 		return NGX_CONF_ERROR;
 	}
 
@@ -146,31 +142,14 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		return NGX_CONF_ERROR;
 	}
 
-	conf->ssl = &ssl->ssl;
+	if (!set_conf_ssl_for_ctx(cf, conf, &ssl->ssl)) {
+		return NGX_CONF_ERROR;
+	}
 
 	cert_elt = conf->certificate->elts;
 	key_elt = conf->certificate_key->elts;
-	for (i = 0; i < conf->certificate->nelts; i++) {
-		switch (cert_elt[i].qal) {
-			case ecdsa_sha2:
-				new_ssl = &conf->ssl_ecdsa_sha2;
-				break;
-			case sha2_only:
-				new_ssl = &conf->ssl_rsa_sha2;
-				break;
-			case ecdsa_only:
-				new_ssl = &conf->ssl_ecdsa;
-				break;
-			default:
-				continue;
-		}
-
-		if (cert_elt[i].qal != key_elt[i].qal) {
-			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "mismatched ssl_multicert and ssl_multicert_key directives");
-			return NGX_CONF_ERROR;
-		}
-
-		if (ngx_ssl_create(new_ssl, ssl->protocols, ssl) != NGX_OK) {
+	for (i = 1; i < conf->certificate->nelts; i++) {
+		if (ngx_ssl_create(&new_ssl, ssl->protocols, ssl) != NGX_OK) {
 			return NGX_CONF_ERROR;
 		}
 
@@ -180,13 +159,20 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		}
 
 		cln->handler = ngx_ssl_cleanup_ctx;
-		cln->data = new_ssl;
+		cln->data = &new_ssl;
 
-		if (ngx_ssl_certificate(cf, new_ssl, &cert_elt[i].val, &key_elt[i].val, ssl->passwords) != NGX_OK) {
+		if (ngx_ssl_certificate(cf, &new_ssl, &cert_elt[i], &key_elt[i], ssl->passwords)
+			!= NGX_OK) {
 			return NGX_CONF_ERROR;
 		}
 
-		if (ngx_ssl_session_cache(new_ssl, &ngx_http_ssl_sess_id_ctx, ssl->builtin_session_cache, ssl->shm_zone, ssl->session_timeout) != NGX_OK) {
+		if (ngx_ssl_session_cache(&new_ssl, &ngx_http_ssl_sess_id_ctx, NGX_SSL_NO_SCACHE,
+				NULL, ssl->session_timeout) != NGX_OK) {
+			return NGX_CONF_ERROR;
+		}
+
+		cln->data = set_conf_ssl_for_ctx(cf, conf, &new_ssl);
+		if (!cln->data) {
 			return NGX_CONF_ERROR;
 		}
 	}
@@ -209,71 +195,94 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	return NGX_CONF_OK;
 }
 
-static char *set_opt_qualifier_str(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void *data)
 {
-	char *p = conf;
+	ngx_conf_set_first_str_array_post_t *p = post;
+	ngx_str_t *s = data;
+	char *conf;
+	ngx_str_t *a;
 
-	ngx_str_t *value;
-	cert_str_st *s;
-	ngx_array_t **a;
-	ngx_conf_post_t *post;
-	size_t i;
+	conf = ngx_http_conf_get_module_srv_conf(cf, (*p->module));
+	a = (ngx_str_t *)(conf + p->offset);
 
-	a = (ngx_array_t **)(p + cmd->offset);
-	if (*a == NGX_CONF_UNSET_PTR) {
-		*a = ngx_array_create(cf->pool, 4, sizeof(cert_str_st));
-		if (*a == NULL) {
-			return NGX_CONF_ERROR;
-		}
-	}
-
-	s = ngx_array_push(*a);
-	if (s == NULL) {
-		return NGX_CONF_ERROR;
-	}
-
-	value = cf->args->elts;
-	s->val = value[1];
-	s->qal = 0;
-
-	for (i = 2; i < cf->args->nelts; i++) {
-		if (ngx_strcmp(value[i].data, "ecdsa") == 0) {
-			s->qal |= ecdsa_only;
-		} else if (ngx_strcmp(value[i].data, "sha2") == 0) {
-			s->qal |= sha2_only;
-		} else {
-			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid flag, only ecdsa and sha2 supported");
-			return NGX_CONF_ERROR;
-		}
-	}
-
-	if (cmd->post) {
-		post = cmd->post;
-		return post->post_handler(cf, post, s);
+	if (!a->data) {
+		*a = *s;
 	}
 
 	return NGX_CONF_OK;
 }
 
-static char *set_ssl_module_default(ngx_conf_t *cf, void *post, void *data)
+static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl)
 {
-	ssl_module_default_post_st *p = post;
-	cert_str_st *s = data;
+	X509 *cert;
 
-	ngx_http_ssl_srv_conf_t *ssl;
-	ngx_str_t *a;
-
-	ssl = ngx_http_conf_get_module_srv_conf(cf, ngx_http_ssl_module);
-
-	a = (ngx_str_t *)((char *)ssl + p->offset);
-
-	if (s->qal && a->data) {
-		return NGX_CONF_OK;
+	cert = SSL_CTX_get0_certificate(ssl->ctx);
+	if (!cert) {
+		return NULL;
 	}
 
-	*a = s->val;
+	switch (X509_get_signature_nid(cert)) {
+		case NID_md2WithRSAEncryption:
+		case NID_md4WithRSAEncryption:
+		case NID_md5WithRSAEncryption:
+		case NID_sha1WithRSAEncryption:
+			if (conf->ssl_rsa.ctx) {
+				goto duplicate;
+			}
 
-	return NGX_CONF_OK;
+			conf->ssl_rsa = *ssl;
+			return &conf->ssl_rsa;
+		case NID_sha256WithRSAEncryption:
+			if (conf->ssl_rsa_sha256.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_rsa_sha256 = *ssl;
+			return &conf->ssl_rsa_sha256;
+		case NID_sha384WithRSAEncryption:
+			if (conf->ssl_rsa_sha384.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_rsa_sha384 = *ssl;
+			return &conf->ssl_rsa_sha384;
+		case NID_sha512WithRSAEncryption:
+			if (conf->ssl_rsa_sha512.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_rsa_sha512 = *ssl;
+			return &conf->ssl_rsa_sha512;
+		case NID_ecdsa_with_SHA256:
+			if (conf->ssl_ecdsa_sha256.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_ecdsa_sha256 = *ssl;
+			return &conf->ssl_ecdsa_sha256;
+		case NID_ecdsa_with_SHA384:
+			if (conf->ssl_ecdsa_sha384.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_ecdsa_sha384 = *ssl;
+			return &conf->ssl_ecdsa_sha384;
+		case NID_ecdsa_with_SHA512:
+			if (conf->ssl_ecdsa_sha512.ctx) {
+				goto duplicate;
+			}
+
+			conf->ssl_ecdsa_sha512 = *ssl;
+			return &conf->ssl_ecdsa_sha512;
+		default:
+			ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+				"invalid certificate signature algorithm");
+			return NULL;
+	}
+
+duplicate:
+	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "certificate type is duplicate");
+	return NULL;
 }
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
@@ -282,10 +291,13 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	const uint8_t *sig_algs_ptr, *dummy;
 	size_t sig_algs_len, len;
 	CBS cipher_suites, sig_algs, supported_sig_algs;
-	int has_ecdsa, has_sha2rsa, has_sha2ecdsa;
+	int has_ecdsa,
+		has_sha256_rsa, has_sha256_ecdsa,
+		has_sha384_rsa, has_sha384_ecdsa,
+		has_sha512_rsa, has_sha512_ecdsa;
 	uint16_t cipher_suite;
 	uint8_t hash, sign;
-	ngx_ssl_t *new_ssl;
+	ngx_ssl_t *new_ssl = NULL;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
 	EVP_PKEY *pkey;
@@ -294,13 +306,19 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
-	if ((conf->ssl_ecdsa_sha2.ctx || conf->ssl_rsa_sha2.ctx || conf->ssl_ecdsa.ctx)
-		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_signature_algorithms, &sig_algs_ptr, &sig_algs_len)) {
+	if ((conf->ssl_rsa_sha256.ctx || conf->ssl_ecdsa_sha256.ctx
+			|| conf->ssl_rsa_sha384.ctx || conf->ssl_ecdsa_sha384.ctx
+			|| conf->ssl_rsa_sha512.ctx || conf->ssl_ecdsa_sha512.ctx)
+		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_signature_algorithms,
+				&sig_algs_ptr, &sig_algs_len)) {
 		has_ecdsa = 0;
-		has_sha2rsa = 0;
-		has_sha2ecdsa = 0;
+		has_sha256_rsa = has_sha256_ecdsa = 0;
+		has_sha384_rsa = has_sha384_ecdsa = 0;
+		has_sha512_rsa = has_sha512_ecdsa = 0;
 
-		if (conf->ssl_ecdsa_sha2.ctx || conf->ssl_ecdsa.ctx) {
+		if (conf->ssl_ecdsa_sha256.ctx
+			|| conf->ssl_ecdsa_sha384.ctx
+			|| conf->ssl_ecdsa_sha512.ctx) {
 			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
 
 			while (CBS_len(&cipher_suites) != 0) {
@@ -316,67 +334,83 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 		}
 
-		if (conf->ssl_ecdsa_sha2.ctx || conf->ssl_rsa_sha2.ctx) {
-			CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
+		CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
 
-			if (!CBS_get_u16_length_prefixed(&sig_algs, &supported_sig_algs)
-				|| CBS_len(&sig_algs) != 0
-				|| CBS_len(&supported_sig_algs) == 0) {
+		if (!CBS_get_u16_length_prefixed(&sig_algs, &supported_sig_algs)
+			|| CBS_len(&sig_algs) != 0
+			|| CBS_len(&supported_sig_algs) == 0) {
+			return -1;
+		}
+
+		if (CBS_len(&supported_sig_algs) % 2 != 0) {
+			return -1;
+		}
+
+		while (CBS_len(&supported_sig_algs) != 0) {
+			if (!CBS_get_u8(&supported_sig_algs, &hash)
+				|| !CBS_get_u8(&supported_sig_algs, &sign)) {
 				return -1;
 			}
 
-			if (CBS_len(&supported_sig_algs) % 2 != 0) {
-				return -1;
-			}
+			switch (sign) {
+				case TLSEXT_signature_rsa:
+					switch (hash) {
+						case TLSEXT_hash_sha256:
+							has_sha256_rsa = 1;
+							break;
+						case TLSEXT_hash_sha384:
+							has_sha384_rsa = 1;
+							break;
+						case TLSEXT_hash_sha512:
+							has_sha512_rsa = 1;
+							break;
+					}
 
-			while (CBS_len(&supported_sig_algs) != 0) {
-				if (!CBS_get_u8(&supported_sig_algs, &hash) || !CBS_get_u8(&supported_sig_algs, &sign)) {
-					return -1;
-				}
-
-				if (hash != TLSEXT_hash_sha256) {
-					continue;
-				}
-
-				switch (sign) {
-					case TLSEXT_signature_rsa:
-						has_sha2rsa = 1;
-						break;
-					case TLSEXT_signature_ecdsa:
-						has_sha2ecdsa = 1;
-						break;
-					default:
-						continue;
-				}
-
-				if (has_sha2rsa && has_sha2ecdsa) {
 					break;
-				}
+				case TLSEXT_signature_ecdsa:
+					switch (hash) {
+						case TLSEXT_hash_sha256:
+							has_sha256_ecdsa = 1;
+							break;
+						case TLSEXT_hash_sha384:
+							has_sha384_ecdsa = 1;
+							break;
+						case TLSEXT_hash_sha512:
+							has_sha512_ecdsa = 1;
+							break;
+					}
+
+					break;
 			}
 		}
 
-		if (conf->ssl_ecdsa_sha2.ctx && has_ecdsa && has_sha2ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha2;
-			goto set_ssl;
+		if (conf->ssl_ecdsa_sha512.ctx && has_ecdsa && has_sha512_ecdsa) {
+			new_ssl = &conf->ssl_ecdsa_sha512;
+		} else if (conf->ssl_ecdsa_sha384.ctx && has_ecdsa && has_sha384_ecdsa) {
+			new_ssl = &conf->ssl_ecdsa_sha384;
+		} else if (conf->ssl_ecdsa_sha256.ctx && has_ecdsa && has_sha256_ecdsa) {
+			new_ssl = &conf->ssl_ecdsa_sha256;
+		} else if (conf->ssl_rsa_sha512.ctx && has_sha512_rsa) {
+			new_ssl = &conf->ssl_rsa_sha512;
+		} else if (conf->ssl_rsa_sha384.ctx && has_sha384_rsa) {
+			new_ssl = &conf->ssl_rsa_sha384;
+		} else if (conf->ssl_rsa_sha256.ctx && has_sha256_rsa) {
+			new_ssl = &conf->ssl_rsa_sha256;
 		}
 
-		if (conf->ssl_rsa_sha2.ctx && has_sha2rsa) {
-			new_ssl = &conf->ssl_rsa_sha2;
-			goto set_ssl;
-		}
-
-		if (conf->ssl_ecdsa.ctx && has_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa;
+		if (new_ssl) {
 			goto set_ssl;
 		}
 	}
 
-	if (conf->ssl_rsa_sha2.ctx && SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name, &dummy, &len)) {
-		new_ssl = &conf->ssl_rsa_sha2;
-		goto set_ssl;
+	if (conf->ssl_rsa_sha256.ctx
+		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name, &dummy, &len)) {
+		new_ssl = &conf->ssl_rsa_sha256;
+	} else if (conf->ssl_rsa.ctx) {
+		new_ssl = &conf->ssl_rsa;
+	} else {
+		return 1;
 	}
-
-	return 1;
 
 set_ssl:
 	SSL_certs_clear(ctx->ssl);
@@ -390,8 +424,6 @@ set_ssl:
 	if (!SSL_use_certificate(ctx->ssl, cert)) {
 		return -1;
 	}
-
-	assert(cert == SSL_CTX_get_ex_data(new_ssl->ctx, ngx_ssl_certificate_index));
 
 	// Set certificate chain
 	if (!SSL_CTX_get0_chain_certs(new_ssl->ctx, &cert_chain)) {
