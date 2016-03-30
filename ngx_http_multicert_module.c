@@ -263,10 +263,6 @@ static char *set_ssl_module_default(ngx_conf_t *cf, void *post, void *data)
 	ngx_http_ssl_srv_conf_t *ssl;
 	ngx_str_t *a;
 
-	/*if (s->qal) {
-		return NGX_CONF_OK;
-	}*/
-
 	ssl = ngx_http_conf_get_module_srv_conf(cf, ngx_http_ssl_module);
 
 	a = (ngx_str_t *)((char *)ssl + p->offset);
@@ -274,11 +270,6 @@ static char *set_ssl_module_default(ngx_conf_t *cf, void *post, void *data)
 	if (s->qal && a->data) {
 		return NGX_CONF_OK;
 	}
-
-	/*if (a->data) {
-		ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "is duplicated or ssl_certificate and ssl_certificate cannot be used with multicert module");
-		return NGX_CONF_ERROR;
-	}*/
 
 	*a = s->val;
 
@@ -290,11 +281,10 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	srv_conf_t *conf;
 	const uint8_t *sig_algs_ptr, *dummy;
 	size_t sig_algs_len, len;
-	CBS cipher_suites, sig_algs;
+	CBS cipher_suites, sig_algs, supported_sig_algs;
 	int has_ecdsa, has_sha2rsa, has_sha2ecdsa;
 	uint16_t cipher_suite;
-	uint8_t hash;
-	uint8_t sig;
+	uint8_t hash, sign;
 	ngx_ssl_t *new_ssl;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
@@ -313,7 +303,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		if (conf->ssl_ecdsa_sha2.ctx || conf->ssl_ecdsa.ctx) {
 			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
 
-			while (CBS_len(&cipher_suites) > 0) {
+			while (CBS_len(&cipher_suites) != 0) {
 				if (!CBS_get_u16(&cipher_suites, &cipher_suite)) {
 					return -1;
 				}
@@ -329,20 +319,26 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		if (conf->ssl_ecdsa_sha2.ctx || conf->ssl_rsa_sha2.ctx) {
 			CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
 
-			if (CBS_len(&sig_algs) % 2 != 0) {
+			if (!CBS_get_u16_length_prefixed(&sig_algs, &supported_sig_algs)
+				|| CBS_len(&sig_algs) != 0
+				|| CBS_len(&supported_sig_algs) == 0) {
 				return -1;
 			}
 
-			while (CBS_len(&sig_algs) > 0) {
-				if (!CBS_get_u8(&sig_algs, &hash) || !CBS_get_u8(&sig_algs, &sig)) {
+			if (CBS_len(&supported_sig_algs) % 2 != 0) {
+				return -1;
+			}
+
+			while (CBS_len(&supported_sig_algs) != 0) {
+				if (!CBS_get_u8(&supported_sig_algs, &hash) || !CBS_get_u8(&supported_sig_algs, &sign)) {
 					return -1;
 				}
 
 				if (hash != TLSEXT_hash_sha256) {
-					continue;				
+					continue;
 				}
 
-				switch (sig) {
+				switch (sign) {
 					case TLSEXT_signature_rsa:
 						has_sha2rsa = 1;
 						break;
