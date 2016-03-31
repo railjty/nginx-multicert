@@ -301,7 +301,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	const uint8_t *sig_algs_ptr, *dummy;
 	size_t sig_algs_len, len;
 	CBS cipher_suites, sig_algs, supported_sig_algs;
-	int has_ecdsa,
+	int can_ecdsa = 0, has_ecdsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa;
@@ -316,37 +316,18 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
-	if (((conf->ssl_rsa_sha256.ctx || conf->ssl_rsa_sha384.ctx || conf->ssl_rsa_sha512.ctx)
-		|| (sk_SSL_CIPHER_num(conf->ecdsa_ciphers)
-			&& (conf->ssl_ecdsa_sha256.ctx
-				|| conf->ssl_ecdsa_sha384.ctx
-				|| conf->ssl_ecdsa_sha512.ctx)))
+	if ((conf->ssl_ecdsa_sha256.ctx || conf->ssl_ecdsa_sha384.ctx || conf->ssl_ecdsa_sha512.ctx)
+		&& sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
+		can_ecdsa = 1;
+	}
+
+	if ((can_ecdsa || conf->ssl_rsa_sha256.ctx || conf->ssl_rsa_sha384.ctx || conf->ssl_rsa_sha512.ctx)
 		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_signature_algorithms,
 				&sig_algs_ptr, &sig_algs_len)) {
 		has_ecdsa = 0;
 		has_sha256_rsa = has_sha256_ecdsa = 0;
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
-
-		if (sk_SSL_CIPHER_num(conf->ecdsa_ciphers)
-			&& (conf->ssl_ecdsa_sha256.ctx
-				|| conf->ssl_ecdsa_sha384.ctx
-				|| conf->ssl_ecdsa_sha512.ctx)) {
-			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
-
-			while (CBS_len(&cipher_suites) != 0) {
-				if (!CBS_get_u16(&cipher_suites, &cipher_suite)) {
-					return -1;
-				}
-
-				cipher = SSL_get_cipher_by_value(cipher_suite);
-				if (cipher && SSL_CIPHER_is_ECDSA(cipher)
-					&& sk_SSL_CIPHER_find(conf->ecdsa_ciphers, NULL, cipher)) {
-					has_ecdsa = 1;
-					break;
-				}
-			}
-		}
 
 		CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
 
@@ -400,6 +381,23 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			if (has_sha256_rsa && has_sha384_rsa && has_sha512_rsa
 				&& has_sha256_ecdsa && has_sha384_ecdsa && has_sha512_ecdsa) {
 				break;
+			}
+		}
+
+		if (can_ecdsa && (has_sha256_ecdsa || has_sha384_ecdsa || has_sha512_ecdsa)) {
+			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
+
+			while (CBS_len(&cipher_suites) != 0) {
+				if (!CBS_get_u16(&cipher_suites, &cipher_suite)) {
+					return -1;
+				}
+
+				cipher = SSL_get_cipher_by_value(cipher_suite);
+				if (cipher && SSL_CIPHER_is_ECDSA(cipher)
+					&& sk_SSL_CIPHER_find(conf->ecdsa_ciphers, NULL, cipher)) {
+					has_ecdsa = 1;
+					break;
+				}
 			}
 		}
 
