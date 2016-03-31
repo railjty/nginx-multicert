@@ -120,7 +120,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
 	ngx_http_ssl_srv_conf_t *ssl;
 	ngx_str_t *cert_elt, *key_elt;
-	ngx_ssl_t new_ssl;
+	ngx_ssl_t new_ssl, *new_ssl_ptr;
 	size_t i;
 	ngx_pool_cleanup_t *cln;
 
@@ -173,10 +173,12 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			return NGX_CONF_ERROR;
 		}
 
-		cln->data = set_conf_ssl_for_ctx(cf, conf, &new_ssl);
-		if (!cln->data) {
+		new_ssl_ptr = set_conf_ssl_for_ctx(cf, conf, &new_ssl);
+		if (!new_ssl_ptr) {
 			return NGX_CONF_ERROR;
 		}
+
+		cln->data = new_ssl_ptr;
 	}
 
 	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
