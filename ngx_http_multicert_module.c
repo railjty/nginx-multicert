@@ -347,35 +347,27 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 				return -1;
 			}
 
-			switch (sign) {
-				case TLSEXT_signature_rsa:
-					switch (hash) {
-						case TLSEXT_hash_sha256:
-							has_sha256_rsa = 1;
-							break;
-						case TLSEXT_hash_sha384:
-							has_sha384_rsa = 1;
-							break;
-						case TLSEXT_hash_sha512:
-							has_sha512_rsa = 1;
-							break;
-					}
-
+			switch (((uint16_t)sign << 8) | hash) {
+				case (TLSEXT_signature_rsa << 8) | TLSEXT_hash_sha256:
+					has_sha256_rsa = 1;
 					break;
-				case TLSEXT_signature_ecdsa:
-					switch (hash) {
-						case TLSEXT_hash_sha256:
-							has_sha256_ecdsa = 1;
-							break;
-						case TLSEXT_hash_sha384:
-							has_sha384_ecdsa = 1;
-							break;
-						case TLSEXT_hash_sha512:
-							has_sha512_ecdsa = 1;
-							break;
-					}
-
+				case (TLSEXT_signature_rsa << 8) | TLSEXT_hash_sha384:
+					has_sha384_rsa = 1;
 					break;
+				case (TLSEXT_signature_rsa << 8) | TLSEXT_hash_sha512:
+					has_sha512_rsa = 1;
+					break;
+				case (TLSEXT_signature_ecdsa << 8) | TLSEXT_hash_sha256:
+					has_sha256_ecdsa = 1;
+					break;
+				case (TLSEXT_signature_ecdsa << 8) | TLSEXT_hash_sha384:
+					has_sha384_ecdsa = 1;
+					break;
+				case (TLSEXT_signature_ecdsa << 8) | TLSEXT_hash_sha512:
+					has_sha512_ecdsa = 1;
+					break;
+				default:
+					continue;
 			}
 
 			if (has_sha256_rsa && has_sha384_rsa && has_sha512_rsa
