@@ -28,6 +28,35 @@ typedef struct {
 	ngx_uint_t offset;
 } ngx_conf_set_first_str_array_post_t;
 
+typedef struct {
+	int nid;
+	size_t offset;
+} ssl_cert_sig_nid_st;
+
+static const ssl_cert_sig_nid_st kCertSigNIDs[] = {
+	{ NID_md2WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa) },
+	{ NID_md4WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa) },
+	{ NID_md5WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa) },
+	{ NID_sha1WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa) },
+	{ NID_sha256WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa_sha256) },
+	{ NID_sha384WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa_sha384) },
+	{ NID_sha512WithRSAEncryption,
+	  offsetof(srv_conf_t, ssl_rsa_sha512) },
+	{ NID_ecdsa_with_SHA256,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha256) },
+	{ NID_ecdsa_with_SHA384,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha384) },
+	{ NID_ecdsa_with_SHA512,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha512) }
+};
+#define kNumCertSigNIDs (sizeof(kCertSigNIDs) / sizeof(ssl_cert_sig_nid_st))
+
 static void *create_srv_conf(ngx_conf_t *cf);
 static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 
@@ -226,73 +255,33 @@ static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void 
 static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl)
 {
 	X509 *cert;
+	int nid;
+	size_t i;
+	ngx_ssl_t *conf_ssl;
 
 	cert = SSL_CTX_get0_certificate(ssl->ctx);
 	if (!cert) {
 		return NULL;
 	}
 
-	switch (X509_get_signature_nid(cert)) {
-		case NID_md2WithRSAEncryption:
-		case NID_md4WithRSAEncryption:
-		case NID_md5WithRSAEncryption:
-		case NID_sha1WithRSAEncryption:
-			if (conf->ssl_rsa.ctx) {
-				goto duplicate;
-			}
+	nid = X509_get_signature_nid(cert);
 
-			conf->ssl_rsa = *ssl;
-			return &conf->ssl_rsa;
-		case NID_sha256WithRSAEncryption:
-			if (conf->ssl_rsa_sha256.ctx) {
-				goto duplicate;
-			}
+	for (i = 0; i < kNumCertSigNIDs; i++) {
+		if (nid != kCertSigNIDs[i].nid) {
+			continue;
+		}
 
-			conf->ssl_rsa_sha256 = *ssl;
-			return &conf->ssl_rsa_sha256;
-		case NID_sha384WithRSAEncryption:
-			if (conf->ssl_rsa_sha384.ctx) {
-				goto duplicate;
-			}
-
-			conf->ssl_rsa_sha384 = *ssl;
-			return &conf->ssl_rsa_sha384;
-		case NID_sha512WithRSAEncryption:
-			if (conf->ssl_rsa_sha512.ctx) {
-				goto duplicate;
-			}
-
-			conf->ssl_rsa_sha512 = *ssl;
-			return &conf->ssl_rsa_sha512;
-		case NID_ecdsa_with_SHA256:
-			if (conf->ssl_ecdsa_sha256.ctx) {
-				goto duplicate;
-			}
-
-			conf->ssl_ecdsa_sha256 = *ssl;
-			return &conf->ssl_ecdsa_sha256;
-		case NID_ecdsa_with_SHA384:
-			if (conf->ssl_ecdsa_sha384.ctx) {
-				goto duplicate;
-			}
-
-			conf->ssl_ecdsa_sha384 = *ssl;
-			return &conf->ssl_ecdsa_sha384;
-		case NID_ecdsa_with_SHA512:
-			if (conf->ssl_ecdsa_sha512.ctx) {
-				goto duplicate;
-			}
-
-			conf->ssl_ecdsa_sha512 = *ssl;
-			return &conf->ssl_ecdsa_sha512;
-		default:
-			ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-				"invalid certificate signature algorithm");
+		conf_ssl = (ngx_ssl_t *)((char *)conf + kCertSigNIDs[i].offset);
+		if (conf_ssl->ctx) {
+			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "certificate type is duplicate");
 			return NULL;
+		}
+
+		*conf_ssl = *ssl;
+		return conf_ssl;
 	}
 
-duplicate:
-	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "certificate type is duplicate");
+	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate signature algorithm");
 	return NULL;
 }
 
