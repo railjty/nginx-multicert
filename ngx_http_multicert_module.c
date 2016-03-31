@@ -388,6 +388,11 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 					break;
 			}
+
+			if (has_sha256_rsa && has_sha384_rsa && has_sha512_rsa
+				&& has_sha256_ecdsa && has_sha384_ecdsa && has_sha512_ecdsa) {
+				break;
+			}
 		}
 
 		if (conf->ssl_ecdsa_sha512.ctx && has_ecdsa && has_sha512_ecdsa) {
