@@ -24,8 +24,9 @@ typedef struct {
 typedef struct {
 	ngx_conf_post_handler_pt post_handler;
 
+	ngx_uint_t conf_offset;
 	ngx_module_t *module;
-	ngx_uint_t offset;
+	ngx_uint_t field_offset;
 } ngx_conf_set_first_str_array_post_t;
 
 typedef struct {
@@ -72,11 +73,13 @@ static ngx_str_t ngx_http_ssl_sess_id_ctx = ngx_string("HTTP");
 
 static ngx_conf_set_first_str_array_post_t ssl_multicert_post =
 	{ ngx_conf_set_first_str_array_slot,
+	  NGX_HTTP_SRV_CONF_OFFSET,
 	  &ngx_http_ssl_module,
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate) };
 
 static ngx_conf_set_first_str_array_post_t ssl_multicert_key_post =
 	{ ngx_conf_set_first_str_array_slot,
+	  NGX_HTTP_SRV_CONF_OFFSET,
 	  &ngx_http_ssl_module,
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate_key) };
 
@@ -239,11 +242,11 @@ static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void 
 {
 	ngx_conf_set_first_str_array_post_t *p = post;
 	ngx_str_t *s = data;
-	char *conf;
+	void **conf;
 	ngx_str_t *a;
 
-	conf = ngx_http_conf_get_module_srv_conf(cf, (*p->module));
-	a = (ngx_str_t *)(conf + p->offset);
+	conf = *(void ***)((char *)cf->ctx + p->conf_offset);
+	a = (ngx_str_t *)((char *)conf[p->module->ctx_index] + p->field_offset);
 
 	if (!a->data) {
 		*a = *s;
