@@ -54,9 +54,9 @@ static const ssl_cert_sig_nid_st kCertSigNIDs[] = {
 	{ NID_ecdsa_with_SHA384,
 	  offsetof(srv_conf_t, ssl_ecdsa_sha384) },
 	{ NID_ecdsa_with_SHA512,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha512) }
+	  offsetof(srv_conf_t, ssl_ecdsa_sha512) },
+	{ NID_undef, 0 }
 };
-#define kNumCertSigNIDs (sizeof(kCertSigNIDs) / sizeof(ssl_cert_sig_nid_st))
 
 static void *create_srv_conf(ngx_conf_t *cf);
 static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
@@ -269,7 +269,7 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 
 	nid = X509_get_signature_nid(cert);
 
-	for (i = 0; i < kNumCertSigNIDs; i++) {
+	for (i = 0; kCertSigNIDs[i].nid != NID_undef; i++) {
 		if (nid != kCertSigNIDs[i].nid) {
 			continue;
 		}
