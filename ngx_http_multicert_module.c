@@ -18,7 +18,7 @@ typedef struct {
 	ngx_ssl_t ssl_ecdsa_sha384;
 	ngx_ssl_t ssl_ecdsa_sha512;
 
-	int has_ecdsa_cipher_suite;
+	STACK_OF(SSL_CIPHER) *ecdsa_ciphers;
 } srv_conf_t;
 
 typedef struct {
@@ -155,6 +155,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	ngx_ssl_t new_ssl, *new_ssl_ptr;
 	size_t i;
 	ngx_pool_cleanup_t *cln;
+	const SSL_CIPHER *cipher;
 
 	ngx_conf_merge_ptr_value(conf->certificate, prev->certificate, NULL);
 	ngx_conf_merge_ptr_value(conf->certificate_key, prev->certificate_key, NULL);
@@ -213,10 +214,16 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		cln->data = new_ssl_ptr;
 	}
 
+	conf->ecdsa_ciphers = sk_SSL_CIPHER_new_null();
+	if (!conf->ecdsa_ciphers) {
+		return NGX_CONF_ERROR;
+	}
+
 	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
-		if (SSL_CIPHER_is_ECDSA(sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i))) {
-			conf->has_ecdsa_cipher_suite = 1;
-			break;
+		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
+		if (SSL_CIPHER_is_ECDSA(cipher)
+			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
+			return NGX_CONF_ERROR;
 		}
 	}
 
@@ -310,7 +317,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
 	if (((conf->ssl_rsa_sha256.ctx || conf->ssl_rsa_sha384.ctx || conf->ssl_rsa_sha512.ctx)
-		|| (conf->has_ecdsa_cipher_suite
+		|| (sk_SSL_CIPHER_num(conf->ecdsa_ciphers)
 			&& (conf->ssl_ecdsa_sha256.ctx
 				|| conf->ssl_ecdsa_sha384.ctx
 				|| conf->ssl_ecdsa_sha512.ctx)))
@@ -321,7 +328,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
 
-		if (conf->has_ecdsa_cipher_suite
+		if (sk_SSL_CIPHER_num(conf->ecdsa_ciphers)
 			&& (conf->ssl_ecdsa_sha256.ctx
 				|| conf->ssl_ecdsa_sha384.ctx
 				|| conf->ssl_ecdsa_sha512.ctx)) {
@@ -333,7 +340,8 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 				}
 
 				cipher = SSL_get_cipher_by_value(cipher_suite);
-				if (cipher && SSL_CIPHER_is_ECDSA(cipher)) {
+				if (cipher && SSL_CIPHER_is_ECDSA(cipher)
+					&& sk_SSL_CIPHER_find(conf->ecdsa_ciphers, NULL, cipher)) {
 					has_ecdsa = 1;
 					break;
 				}
