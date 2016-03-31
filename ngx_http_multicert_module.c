@@ -67,6 +67,8 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
 
+static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b);
+
 static int g_ssl_ctx_exdata_srv_data_index = -1;
 
 static ngx_str_t ngx_http_ssl_sess_id_ctx = ngx_string("HTTP");
@@ -214,7 +216,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		cln->data = new_ssl_ptr;
 	}
 
-	conf->ecdsa_ciphers = sk_SSL_CIPHER_new_null();
+	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
 	if (!conf->ecdsa_ciphers) {
 		return NGX_CONF_ERROR;
 	}
@@ -226,6 +228,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			return NGX_CONF_ERROR;
 		}
 	}
+
+	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
 
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
@@ -461,4 +465,18 @@ set_ssl:
 	}
 
 	return 1;
+}
+
+static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b)
+{
+	const SSL_CIPHER *a = *in_a;
+	const SSL_CIPHER *b = *in_b;
+
+	if (a->id > b->id) {
+		return 1;
+	} else if (a->id < b->id) {
+		return -1;
+	} else {
+		return 0;
+	}
 }
