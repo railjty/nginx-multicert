@@ -4,8 +4,6 @@
 
 #include <assert.h>
 
-#include <ngx_keyless_module.h>
-
 typedef struct {
 	ngx_array_t *certificate;
 	ngx_array_t *certificate_key;
@@ -307,11 +305,6 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		has_sha512_rsa, has_sha512_ecdsa;
 	uint16_t cipher_suite;
 	uint8_t hash, sign;
-	ngx_ssl_t *new_ssl = NULL;
-	X509 *cert;
-	STACK_OF(X509) *cert_chain;
-	EVP_PKEY *pkey;
-	KEYLESS_CTX *keyless;
 	const SSL_CIPHER *cipher;
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
@@ -394,70 +387,30 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		}
 
 		if (conf->ssl_ecdsa_sha512.ctx && has_ecdsa && has_sha512_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha512;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_ecdsa_sha512.ctx);
 		} else if (conf->ssl_ecdsa_sha384.ctx && has_ecdsa && has_sha384_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha384;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_ecdsa_sha384.ctx);
 		} else if (conf->ssl_ecdsa_sha256.ctx && has_ecdsa && has_sha256_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha256;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_ecdsa_sha256.ctx);
 		} else if (conf->ssl_rsa_sha512.ctx && has_sha512_rsa) {
-			new_ssl = &conf->ssl_rsa_sha512;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_rsa_sha512.ctx);
 		} else if (conf->ssl_rsa_sha384.ctx && has_sha384_rsa) {
-			new_ssl = &conf->ssl_rsa_sha384;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_rsa_sha384.ctx);
 		} else if (conf->ssl_rsa_sha256.ctx && has_sha256_rsa) {
-			new_ssl = &conf->ssl_rsa_sha256;
+			SSL_set_SSL_CTX(ctx->ssl, conf->ssl_rsa_sha256.ctx);
+		} else {
+			goto continue_check;
 		}
 
-		if (new_ssl) {
-			goto set_ssl;
-		}
-	}
-
-	if (conf->ssl_rsa_sha256.ctx
-		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name, &dummy, &len)) {
-		new_ssl = &conf->ssl_rsa_sha256;
-	} else if (conf->ssl_rsa.ctx) {
-		new_ssl = &conf->ssl_rsa;
-	} else {
 		return 1;
 	}
 
-set_ssl:
-	SSL_certs_clear(ctx->ssl);
-
-	// Set certificate
-	cert = SSL_CTX_get0_certificate(new_ssl->ctx);
-	if (!cert) {
-		return -1;
-	}
-
-	if (!SSL_use_certificate(ctx->ssl, cert)) {
-		return -1;
-	}
-
-	// Set certificate chain
-	if (!SSL_CTX_get0_chain_certs(new_ssl->ctx, &cert_chain)) {
-		return -1;
-	}
-
-	if (!SSL_set1_chain(ctx->ssl, cert_chain)) {
-		return -1;
-	}
-
-	// Set private key
-	pkey = SSL_CTX_get0_privatekey(new_ssl->ctx);
-	if (pkey && !SSL_use_PrivateKey(ctx->ssl, pkey)) {
-		return -1;
-	}
-
-	// Set session id context
-	if (!SSL_set_session_id_context(ctx->ssl, new_ssl->ctx->sid_ctx, new_ssl->ctx->sid_ctx_length)) {
-		return -1;
-	}
-
-	// Set keyless-nginx
-	keyless = ssl_ctx_get_keyless_ctx(new_ssl->ctx);
-	if (keyless && !keyless_attach_ssl(ctx->ssl, keyless)) {
-		return -1;
+continue_check:
+	if (conf->ssl_rsa_sha256.ctx
+		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name, &dummy, &len)) {
+		SSL_set_SSL_CTX(ctx->ssl, conf->ssl_rsa_sha256.ctx);
+	} else if (conf->ssl_rsa.ctx) {
+		SSL_set_SSL_CTX(ctx->ssl, conf->ssl_rsa.ctx);
 	}
 
 	return 1;
