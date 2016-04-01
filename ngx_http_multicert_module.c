@@ -35,10 +35,6 @@ typedef struct {
 } ssl_cert_sig_nid_st;
 
 static const ssl_cert_sig_nid_st kCertSigNIDs[] = {
-	{ NID_md2WithRSAEncryption,
-	  offsetof(srv_conf_t, ssl_rsa) },
-	{ NID_md4WithRSAEncryption,
-	  offsetof(srv_conf_t, ssl_rsa) },
 	{ NID_md5WithRSAEncryption,
 	  offsetof(srv_conf_t, ssl_rsa) },
 	{ NID_sha1WithRSAEncryption,
