@@ -474,8 +474,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 		}
 
-		if (can_ecdsa && has_ecdsa
-			&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_elliptic_curves,
+		if (has_ecdsa && SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_elliptic_curves,
 				&ec_curves_ptr, &ec_curves_len)) {
 			CBS_init(&ec_curves, ec_curves_ptr, ec_curves_len);
 
@@ -512,39 +511,30 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 					break;
 				}
 			}
-		} else if (can_ecdsa && has_ecdsa) {
+		} else {
 			/* Clients are not required to send a supported_curves extension. In this
 			 * case, the server is free to pick any curve it likes. See RFC 4492,
 			 * section 4, paragraph 3. */
-			has_secp256r1 = 1;
+			has_secp256r1 = has_ecdsa;
 		}
 
-		if (conf->ssl_ecdsa_sha512_secp521r1.ctx && has_ecdsa && has_sha512_ecdsa
-			&& has_secp521r1) {
+		if (conf->ssl_ecdsa_sha512_secp521r1.ctx && has_sha512_ecdsa && has_secp521r1) {
 			new_ssl = &conf->ssl_ecdsa_sha512_secp521r1;
-		} else if (conf->ssl_ecdsa_sha384_secp521r1.ctx && has_ecdsa && has_sha384_ecdsa
-			&& has_secp521r1) {
+		} else if (conf->ssl_ecdsa_sha384_secp521r1.ctx && has_sha384_ecdsa && has_secp521r1) {
 			new_ssl = &conf->ssl_ecdsa_sha384_secp521r1;
-		} else if (conf->ssl_ecdsa_sha256_secp521r1.ctx && has_ecdsa && has_sha256_ecdsa
-			& has_secp521r1) {
+		} else if (conf->ssl_ecdsa_sha256_secp521r1.ctx && has_sha256_ecdsa && has_secp521r1) {
 			new_ssl = &conf->ssl_ecdsa_sha256_secp521r1;
-		} else if (conf->ssl_ecdsa_sha512_secp384r1.ctx && has_ecdsa && has_sha512_ecdsa
-			&& has_secp384r1) {
+		} else if (conf->ssl_ecdsa_sha512_secp384r1.ctx && has_sha512_ecdsa && has_secp384r1) {
 			new_ssl = &conf->ssl_ecdsa_sha512_secp384r1;
-		} else if (conf->ssl_ecdsa_sha384_secp384r1.ctx && has_ecdsa && has_sha384_ecdsa
-			&& has_secp384r1) {
+		} else if (conf->ssl_ecdsa_sha384_secp384r1.ctx && has_sha384_ecdsa && has_secp384r1) {
 			new_ssl = &conf->ssl_ecdsa_sha384_secp384r1;
-		} else if (conf->ssl_ecdsa_sha256_secp384r1.ctx && has_ecdsa && has_sha256_ecdsa
-			&& has_secp384r1) {
+		} else if (conf->ssl_ecdsa_sha256_secp384r1.ctx && has_sha256_ecdsa && has_secp384r1) {
 			new_ssl = &conf->ssl_ecdsa_sha256_secp384r1;
-		} else if (conf->ssl_ecdsa_sha512_secp256r1.ctx && has_ecdsa && has_sha512_ecdsa
-			&& has_secp256r1) {
+		} else if (conf->ssl_ecdsa_sha512_secp256r1.ctx && has_sha512_ecdsa && has_secp256r1) {
 			new_ssl = &conf->ssl_ecdsa_sha512_secp256r1;
-		} else if (conf->ssl_ecdsa_sha384_secp256r1.ctx && has_ecdsa && has_sha384_ecdsa
-			&& has_secp256r1) {
+		} else if (conf->ssl_ecdsa_sha384_secp256r1.ctx && has_sha384_ecdsa && has_secp256r1) {
 			new_ssl = &conf->ssl_ecdsa_sha384_secp256r1;
-		} else if (conf->ssl_ecdsa_sha256_secp256r1.ctx && has_ecdsa && has_sha256_ecdsa
-			&& has_secp256r1) {
+		} else if (conf->ssl_ecdsa_sha256_secp256r1.ctx && has_sha256_ecdsa && has_secp256r1) {
 			new_ssl = &conf->ssl_ecdsa_sha256_secp256r1;
 		} else if (conf->ssl_rsa_sha512.ctx && has_sha512_rsa) {
 			new_ssl = &conf->ssl_rsa_sha512;
