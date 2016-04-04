@@ -22,19 +22,10 @@ typedef struct {
 	ngx_array_t *certificate;
 	ngx_array_t *certificate_key;
 
+	ngx_queue_t ssl;
+
 	ngx_ssl_t ssl_rsa;
 	ngx_ssl_t ssl_rsa_sha256;
-	ngx_ssl_t ssl_rsa_sha384;
-	ngx_ssl_t ssl_rsa_sha512;
-	ngx_ssl_t ssl_ecdsa_sha256_secp256r1;
-	ngx_ssl_t ssl_ecdsa_sha384_secp256r1;
-	ngx_ssl_t ssl_ecdsa_sha512_secp256r1;
-	ngx_ssl_t ssl_ecdsa_sha256_secp384r1;
-	ngx_ssl_t ssl_ecdsa_sha384_secp384r1;
-	ngx_ssl_t ssl_ecdsa_sha512_secp384r1;
-	ngx_ssl_t ssl_ecdsa_sha256_secp521r1;
-	ngx_ssl_t ssl_ecdsa_sha384_secp521r1;
-	ngx_ssl_t ssl_ecdsa_sha512_secp521r1;
 
 	STACK_OF(SSL_CIPHER) *ecdsa_ciphers;
 } srv_conf_t;
@@ -49,55 +40,12 @@ typedef struct {
 
 typedef struct {
 	int nid;
-	int ec_curve_nid;
-	size_t offset;
-} ssl_cert_sig_nid_st;
+	int curve_nid;
 
-static const ssl_cert_sig_nid_st kCertSigNIDs[] = {
-	{ NID_md5WithRSAEncryption,
-	  NID_undef,
-	  offsetof(srv_conf_t, ssl_rsa) },
-	{ NID_sha1WithRSAEncryption,
-	  NID_undef,
-	  offsetof(srv_conf_t, ssl_rsa) },
-	{ NID_sha256WithRSAEncryption,
-	  NID_undef,
-	  offsetof(srv_conf_t, ssl_rsa_sha256) },
-	{ NID_sha384WithRSAEncryption,
-	  NID_undef,
-	  offsetof(srv_conf_t, ssl_rsa_sha384) },
-	{ NID_sha512WithRSAEncryption,
-	  NID_undef,
-	  offsetof(srv_conf_t, ssl_rsa_sha512) },
-	{ NID_ecdsa_with_SHA256,
-	  NID_X9_62_prime256v1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp256r1) },
-	{ NID_ecdsa_with_SHA384,
-	  NID_X9_62_prime256v1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp256r1) },
-	{ NID_ecdsa_with_SHA512,
-	  NID_X9_62_prime256v1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp256r1) },
-	{ NID_ecdsa_with_SHA256,
-	  NID_secp384r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp384r1) },
-	{ NID_ecdsa_with_SHA384,
-	  NID_secp384r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp384r1) },
-	{ NID_ecdsa_with_SHA512,
-	  NID_secp384r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp384r1) },
-	{ NID_ecdsa_with_SHA256,
-	  NID_secp521r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp521r1) },
-	{ NID_ecdsa_with_SHA384,
-	  NID_secp521r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp521r1) },
-	{ NID_ecdsa_with_SHA512,
-	  NID_secp521r1,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp521r1) },
-	{ NID_undef, NID_undef, 0 }
-};
+	ngx_ssl_t ssl;
+
+	ngx_queue_t queue;
+} ssl_ctx_st;
 
 static void *create_srv_conf(ngx_conf_t *cf);
 static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
@@ -109,6 +57,8 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
 
 static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b);
+
+static ngx_int_t cmp_ssl_queue_item(const ngx_queue_t *one, const ngx_queue_t *two);
 
 static int g_ssl_ctx_exdata_srv_data_index = -1;
 
@@ -199,6 +149,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	size_t i;
 	ngx_pool_cleanup_t *cln;
 	const SSL_CIPHER *cipher;
+	ngx_queue_t *q, *prev_q;
+	ssl_ctx_st *ssl_ctx;
 #ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
 	ngx_http_lua_srv_conf_t *lua;
 #endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
@@ -222,6 +174,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "no ssl configured for the server");
 		return NGX_CONF_ERROR;
 	}
+
+	ngx_queue_init(&conf->ssl);
 
 	if (!set_conf_ssl_for_ctx(cf, conf, &ssl->ssl)) {
 		return NGX_CONF_ERROR;
@@ -270,6 +224,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		cln->data = new_ssl_ptr;
 	}
 
+	ngx_queue_sort(&conf->ssl, cmp_ssl_queue_item);
+
 	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
 	if (!conf->ecdsa_ciphers) {
 		return NGX_CONF_ERROR;
@@ -284,6 +240,33 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	}
 
 	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
+
+	for (q = ngx_queue_head(&conf->ssl);
+		q != ngx_queue_sentinel(&conf->ssl);
+		q = ngx_queue_next(q)) {
+		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+
+		prev_q = ngx_queue_prev(q);
+
+		switch (ssl_ctx->nid) {
+			case NID_sha1WithRSAEncryption:
+				ngx_queue_remove(q);
+				q = prev_q;
+
+				conf->ssl_rsa = ssl_ctx->ssl;
+				continue;
+			case NID_sha256WithRSAEncryption:
+				conf->ssl_rsa_sha256 = ssl_ctx->ssl;
+				continue;
+		}
+
+		if (ssl_ctx->curve_nid && !sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
+			ngx_queue_remove(q);
+			q = prev_q;
+
+			ngx_pfree(cf->cycle->pool, ssl_ctx);
+		}
+	}
 
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
@@ -301,6 +284,42 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	SSL_CTX_set_select_certificate_cb(ssl->ssl.ctx, select_certificate_cb);
 
 	return NGX_CONF_OK;
+}
+
+static ngx_int_t cmp_ssl_queue_item(const ngx_queue_t *one, const ngx_queue_t *two)
+{
+	ssl_ctx_st *a, *b;
+
+	a = ngx_queue_data(one, ssl_ctx_st, queue);
+	b = ngx_queue_data(two, ssl_ctx_st, queue);
+
+	if (a->curve_nid && !b->curve_nid) {
+		/* shift ecdsa keys to the start */
+		return -1;
+	}
+
+	if (!a->curve_nid && b->curve_nid) {
+		/* shift ecdsa keys to the start */
+		return 1;
+	}
+
+	/* this only works becuase the currently limited NIDs are ordered
+	 * as we want the certificates to be */
+	if (a->curve_nid < b->curve_nid) {
+		return 1;
+	} else if (a->curve_nid > b->curve_nid) {
+		return -1;
+	}
+
+	/* this only works becuase the currently limited NIDs are ordered
+	 * as we want the certificates to be */
+	if (a->nid < b->nid) {
+		return 1;
+	} else if (a->nid > b->nid) {
+		return -1;
+	}
+
+	return 0;
 }
 
 static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void *data)
@@ -326,8 +345,8 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 	EVP_PKEY *pkey;
 	const EC_KEY *ec_key;
 	int nid, curve_nid = NID_undef;
-	size_t i;
-	ngx_ssl_t *conf_ssl;
+	ngx_queue_t *q;
+	ssl_ctx_st *ssl_ctx;
 
 	cert = SSL_CTX_get0_certificate(ssl->ctx);
 	if (!cert) {
@@ -346,24 +365,56 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 		EVP_PKEY_free(pkey);
 	}
 
-	for (i = 0; kCertSigNIDs[i].nid != NID_undef; i++) {
-		if (nid != kCertSigNIDs[i].nid
-			|| curve_nid != kCertSigNIDs[i].ec_curve_nid) {
-			continue;
-		}
+	switch (nid) {
+		case NID_sha1WithRSAEncryption:
+		case NID_sha256WithRSAEncryption:
+		case NID_sha384WithRSAEncryption:
+		case NID_sha512WithRSAEncryption:
+			break;
+		case NID_ecdsa_with_SHA256:
+		case NID_ecdsa_with_SHA384:
+		case NID_ecdsa_with_SHA512:
+			if (curve_nid == NID_undef) {
+				ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid ec group type");
+				return NULL;
+			}
 
-		conf_ssl = (ngx_ssl_t *)((char *)conf + kCertSigNIDs[i].offset);
-		if (conf_ssl->ctx) {
+			break;
+		default:
+			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate type");
+			return NULL;
+	}
+
+	switch (curve_nid) {
+		case NID_undef:
+		case NID_X9_62_prime256v1:
+		case NID_secp384r1:
+		case NID_secp521r1:
+			break;
+		default:
+			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid ec group type");
+			return NULL;
+	}
+
+	for (q = ngx_queue_head(&conf->ssl);
+		q != ngx_queue_sentinel(&conf->ssl);
+		q = ngx_queue_next(q)) {
+		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+
+		if (ssl_ctx->nid == nid && ssl_ctx->curve_nid == curve_nid) {
 			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "certificate type is duplicate");
 			return NULL;
 		}
-
-		*conf_ssl = *ssl;
-		return conf_ssl;
 	}
 
-	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate signature algorithm or ec curve");
-	return NULL;
+	ssl_ctx = ngx_pcalloc(cf->cycle->pool, sizeof(ssl_ctx_st));
+	ngx_queue_insert_tail(&conf->ssl, &ssl_ctx->queue);
+
+	ssl_ctx->nid = nid;
+	ssl_ctx->curve_nid = curve_nid;
+
+	ssl_ctx->ssl = *ssl;
+	return &ssl_ctx->ssl;
 }
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
@@ -372,7 +423,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *dummy;
 	size_t sig_algs_len, ec_curves_len, len;
 	CBS cipher_suites, sig_algs, supported_sig_algs, ec_curves, supported_ec_curves;
-	int can_ecdsa = 0, has_ecdsa,
+	int has_ecdsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa,
@@ -385,25 +436,13 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	EVP_PKEY *pkey;
 	KEYLESS_CTX *keyless;
 	const SSL_CIPHER *cipher;
+	ngx_queue_t *q;
+	ssl_ctx_st *ssl_ctx;
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
-	if ((conf->ssl_ecdsa_sha256_secp256r1.ctx
-			|| conf->ssl_ecdsa_sha384_secp256r1.ctx
-			|| conf->ssl_ecdsa_sha512_secp256r1.ctx
-			|| conf->ssl_ecdsa_sha256_secp384r1.ctx
-			|| conf->ssl_ecdsa_sha384_secp384r1.ctx
-			|| conf->ssl_ecdsa_sha512_secp384r1.ctx
-			|| conf->ssl_ecdsa_sha256_secp521r1.ctx
-			|| conf->ssl_ecdsa_sha384_secp521r1.ctx
-			|| conf->ssl_ecdsa_sha512_secp521r1.ctx)
-		&& sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
-		can_ecdsa = 1;
-	}
-
-	if ((can_ecdsa || conf->ssl_rsa_sha256.ctx || conf->ssl_rsa_sha384.ctx || conf->ssl_rsa_sha512.ctx)
-		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_signature_algorithms,
-				&sig_algs_ptr, &sig_algs_len)) {
+	if (!ngx_queue_empty(&conf->ssl) && SSL_early_callback_ctx_extension_get(ctx,
+			TLSEXT_TYPE_signature_algorithms, &sig_algs_ptr, &sig_algs_len)) {
 		has_ecdsa = 0;
 		has_sha256_rsa = has_sha256_ecdsa = 0;
 		has_sha384_rsa = has_sha384_ecdsa = 0;
@@ -457,7 +496,8 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 		}
 
-		if (can_ecdsa && (has_sha256_ecdsa || has_sha384_ecdsa || has_sha512_ecdsa)) {
+		if ((has_sha256_ecdsa || has_sha384_ecdsa || has_sha512_ecdsa)
+			&& sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
 			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
 
 			while (CBS_len(&cipher_suites) != 0) {
@@ -518,33 +558,28 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			has_secp256r1 = has_ecdsa;
 		}
 
-		if (conf->ssl_ecdsa_sha512_secp521r1.ctx && has_sha512_ecdsa && has_secp521r1) {
-			new_ssl = &conf->ssl_ecdsa_sha512_secp521r1;
-		} else if (conf->ssl_ecdsa_sha384_secp521r1.ctx && has_sha384_ecdsa && has_secp521r1) {
-			new_ssl = &conf->ssl_ecdsa_sha384_secp521r1;
-		} else if (conf->ssl_ecdsa_sha256_secp521r1.ctx && has_sha256_ecdsa && has_secp521r1) {
-			new_ssl = &conf->ssl_ecdsa_sha256_secp521r1;
-		} else if (conf->ssl_ecdsa_sha512_secp384r1.ctx && has_sha512_ecdsa && has_secp384r1) {
-			new_ssl = &conf->ssl_ecdsa_sha512_secp384r1;
-		} else if (conf->ssl_ecdsa_sha384_secp384r1.ctx && has_sha384_ecdsa && has_secp384r1) {
-			new_ssl = &conf->ssl_ecdsa_sha384_secp384r1;
-		} else if (conf->ssl_ecdsa_sha256_secp384r1.ctx && has_sha256_ecdsa && has_secp384r1) {
-			new_ssl = &conf->ssl_ecdsa_sha256_secp384r1;
-		} else if (conf->ssl_ecdsa_sha512_secp256r1.ctx && has_sha512_ecdsa && has_secp256r1) {
-			new_ssl = &conf->ssl_ecdsa_sha512_secp256r1;
-		} else if (conf->ssl_ecdsa_sha384_secp256r1.ctx && has_sha384_ecdsa && has_secp256r1) {
-			new_ssl = &conf->ssl_ecdsa_sha384_secp256r1;
-		} else if (conf->ssl_ecdsa_sha256_secp256r1.ctx && has_sha256_ecdsa && has_secp256r1) {
-			new_ssl = &conf->ssl_ecdsa_sha256_secp256r1;
-		} else if (conf->ssl_rsa_sha512.ctx && has_sha512_rsa) {
-			new_ssl = &conf->ssl_rsa_sha512;
-		} else if (conf->ssl_rsa_sha384.ctx && has_sha384_rsa) {
-			new_ssl = &conf->ssl_rsa_sha384;
-		} else if (conf->ssl_rsa_sha256.ctx && has_sha256_rsa) {
-			new_ssl = &conf->ssl_rsa_sha256;
+		if (!has_ecdsa) {
+			has_sha256_ecdsa = has_sha384_ecdsa = has_sha512_ecdsa = 0;
 		}
 
-		if (new_ssl) {
+		for (q = ngx_queue_head(&conf->ssl);
+			q != ngx_queue_sentinel(&conf->ssl);
+			q = ngx_queue_next(q)) {
+			ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+
+			if ((ssl_ctx->nid == NID_sha256WithRSAEncryption && !has_sha256_rsa)
+				|| (ssl_ctx->nid == NID_sha384WithRSAEncryption && !has_sha384_rsa)
+				|| (ssl_ctx->nid == NID_sha512WithRSAEncryption && !has_sha512_rsa)
+				|| (ssl_ctx->nid == NID_ecdsa_with_SHA256 && !has_sha256_ecdsa)
+				|| (ssl_ctx->nid == NID_ecdsa_with_SHA384 && !has_sha384_ecdsa)
+				|| (ssl_ctx->nid == NID_ecdsa_with_SHA512 && !has_sha512_ecdsa)
+				|| (ssl_ctx->curve_nid == NID_X9_62_prime256v1 && !has_secp256r1)
+				|| (ssl_ctx->curve_nid == NID_secp384r1 && !has_secp384r1)
+				|| (ssl_ctx->curve_nid == NID_secp521r1 && !has_secp521r1)) {
+				continue;
+			}
+
+			new_ssl = &ssl_ctx->ssl;
 			goto set_ssl;
 		}
 	}
