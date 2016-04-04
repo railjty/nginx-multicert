@@ -58,7 +58,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
 
 static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b);
 
-static ngx_int_t cmp_ssl_queue_item(const ngx_queue_t *one, const ngx_queue_t *two);
+static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two);
 
 static int g_ssl_ctx_exdata_srv_data_index = -1;
 
@@ -224,7 +224,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		cln->data = new_ssl_ptr;
 	}
 
-	ngx_queue_sort(&conf->ssl, cmp_ssl_queue_item);
+	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
 
 	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
 	if (!conf->ecdsa_ciphers) {
@@ -282,7 +282,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	return NGX_CONF_OK;
 }
 
-static ngx_int_t cmp_ssl_queue_item(const ngx_queue_t *one, const ngx_queue_t *two)
+static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two)
 {
 	ssl_ctx_st *a, *b;
 
