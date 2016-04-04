@@ -557,10 +557,6 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			has_secp256r1 = has_ecdsa;
 		}
 
-		if (!has_ecdsa) {
-			has_sha256_ecdsa = has_sha384_ecdsa = has_sha512_ecdsa = 0;
-		}
-
 		for (q = ngx_queue_head(&conf->ssl);
 			q != ngx_queue_sentinel(&conf->ssl);
 			q = ngx_queue_next(q)) {
