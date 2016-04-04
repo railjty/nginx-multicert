@@ -403,6 +403,10 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 	}
 
 	ssl_ctx = ngx_pcalloc(cf->cycle->pool, sizeof(ssl_ctx_st));
+	if (!ssl_ctx) {
+		return NULL;
+	}
+
 	ngx_queue_insert_tail(&conf->ssl, &ssl_ctx->queue);
 
 	ssl_ctx->nid = nid;
