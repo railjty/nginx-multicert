@@ -245,9 +245,9 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
 	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
 
-	for (q = ngx_queue_head(&conf->ssl);
+	for (q = ngx_queue_last(&conf->ssl);
 		q != ngx_queue_sentinel(&conf->ssl);
-		q = ngx_queue_next(q)) {
+		q = ngx_queue_prev(q)) {
 		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
 
 		switch (ssl_ctx->nid) {
@@ -257,6 +257,12 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			case NID_sha256WithRSAEncryption:
 				conf->ssl_rsa_sha256 = ssl_ctx->ssl;
 				break;
+			default:
+				continue;
+		}
+
+		if (conf->ssl_rsa.ctx && conf->ssl_rsa_sha256.ctx) {
+			break;
 		}
 	}
 
