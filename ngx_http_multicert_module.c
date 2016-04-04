@@ -246,13 +246,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		q = ngx_queue_next(q)) {
 		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
 
-		prev_q = ngx_queue_prev(q);
-
 		switch (ssl_ctx->nid) {
 			case NID_sha1WithRSAEncryption:
-				ngx_queue_remove(q);
-				q = prev_q;
-
 				conf->ssl_rsa = ssl_ctx->ssl;
 				continue;
 			case NID_sha256WithRSAEncryption:
@@ -261,6 +256,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		}
 
 		if (ssl_ctx->curve_nid && !sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
+			prev_q = ngx_queue_prev(q);
 			ngx_queue_remove(q);
 			q = prev_q;
 
@@ -423,7 +419,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *dummy;
 	size_t sig_algs_len, ec_curves_len, len;
 	CBS cipher_suites, sig_algs, supported_sig_algs, ec_curves, supported_ec_curves;
-	int has_ecdsa,
+	int has_ecdsa, has_sha1_rsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa,
@@ -443,7 +439,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 	if (!ngx_queue_empty(&conf->ssl) && SSL_early_callback_ctx_extension_get(ctx,
 			TLSEXT_TYPE_signature_algorithms, &sig_algs_ptr, &sig_algs_len)) {
-		has_ecdsa = 0;
+		has_ecdsa = has_sha1_rsa = 0;
 		has_sha256_rsa = has_sha256_ecdsa = 0;
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
@@ -468,6 +464,9 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 
 			switch (((uint16_t)sign << 8) | hash) {
+				case (TLSEXT_signature_rsa << 8) | TLSEXT_hash_sha1:
+					has_sha1_rsa = 1;
+					break;
 				case (TLSEXT_signature_rsa << 8) | TLSEXT_hash_sha256:
 					has_sha256_rsa = 1;
 					break;
@@ -490,7 +489,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 					continue;
 			}
 
-			if (has_sha256_rsa && has_sha384_rsa && has_sha512_rsa
+			if (has_sha1_rsa && has_sha256_rsa && has_sha384_rsa && has_sha512_rsa
 				&& has_sha256_ecdsa && has_sha384_ecdsa && has_sha512_ecdsa) {
 				break;
 			}
@@ -567,7 +566,8 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			q = ngx_queue_next(q)) {
 			ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
 
-			if ((ssl_ctx->nid == NID_sha256WithRSAEncryption && !has_sha256_rsa)
+			if ((ssl_ctx->nid == NID_sha1WithRSAEncryption && !has_sha1_rsa)
+				|| (ssl_ctx->nid == NID_sha256WithRSAEncryption && !has_sha256_rsa)
 				|| (ssl_ctx->nid == NID_sha384WithRSAEncryption && !has_sha384_rsa)
 				|| (ssl_ctx->nid == NID_sha512WithRSAEncryption && !has_sha512_rsa)
 				|| (ssl_ctx->nid == NID_ecdsa_with_SHA256 && !has_sha256_ecdsa)
@@ -582,6 +582,8 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			new_ssl = &ssl_ctx->ssl;
 			goto set_ssl;
 		}
+
+		return 1;
 	}
 
 	if (conf->ssl_rsa_sha256.ctx
