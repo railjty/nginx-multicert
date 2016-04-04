@@ -289,13 +289,10 @@ static ngx_int_t cmp_ssl_queue_item(const ngx_queue_t *one, const ngx_queue_t *t
 	a = ngx_queue_data(one, ssl_ctx_st, queue);
 	b = ngx_queue_data(two, ssl_ctx_st, queue);
 
+	/* shift ecdsa keys to the start */
 	if (a->curve_nid && !b->curve_nid) {
-		/* shift ecdsa keys to the start */
 		return -1;
-	}
-
-	if (!a->curve_nid && b->curve_nid) {
-		/* shift ecdsa keys to the start */
+	} else if (!a->curve_nid && b->curve_nid) {
 		return 1;
 	}
 
