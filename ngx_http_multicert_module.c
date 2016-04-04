@@ -363,29 +363,25 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 		case NID_sha256WithRSAEncryption:
 		case NID_sha384WithRSAEncryption:
 		case NID_sha512WithRSAEncryption:
+			assert(curve_nid == NID_undef);
 			break;
 		case NID_ecdsa_with_SHA256:
 		case NID_ecdsa_with_SHA384:
 		case NID_ecdsa_with_SHA512:
-			if (curve_nid == NID_undef) {
-				ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid ec group type");
-				return NULL;
+			switch (curve_nid) {
+				case NID_X9_62_prime256v1:
+				case NID_secp384r1:
+				case NID_secp521r1:
+					break;
+				default:
+					ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+						"invalid ec group type");
+					return NULL;
 			}
 
 			break;
 		default:
 			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate type");
-			return NULL;
-	}
-
-	switch (curve_nid) {
-		case NID_undef:
-		case NID_X9_62_prime256v1:
-		case NID_secp384r1:
-		case NID_secp521r1:
-			break;
-		default:
-			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid ec group type");
 			return NULL;
 	}
 
