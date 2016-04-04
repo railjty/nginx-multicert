@@ -149,7 +149,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	size_t i;
 	ngx_pool_cleanup_t *cln;
 	const SSL_CIPHER *cipher;
-	ngx_queue_t *q, *prev_q;
+	ngx_queue_t *q;
 	ssl_ctx_st *ssl_ctx;
 #ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
 	ngx_http_lua_srv_conf_t *lua;
@@ -174,6 +174,21 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "no ssl configured for the server");
 		return NGX_CONF_ERROR;
 	}
+
+	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
+	if (!conf->ecdsa_ciphers) {
+		return NGX_CONF_ERROR;
+	}
+
+	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
+		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
+		if (SSL_CIPHER_is_ECDSA(cipher)
+			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
+			return NGX_CONF_ERROR;
+		}
+	}
+
+	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
 
 	ngx_queue_init(&conf->ssl);
 
@@ -220,26 +235,15 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		if (!new_ssl_ptr) {
 			return NGX_CONF_ERROR;
 		}
-
 		cln->data = new_ssl_ptr;
-	}
 
-	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
-
-	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
-	if (!conf->ecdsa_ciphers) {
-		return NGX_CONF_ERROR;
-	}
-
-	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
-		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
-		if (SSL_CIPHER_is_ECDSA(cipher)
-			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
-			return NGX_CONF_ERROR;
+		if (new_ssl_ptr == &new_ssl) {
+			ngx_ssl_cleanup_ctx(&new_ssl);
+			cln->handler = NULL;
 		}
 	}
 
-	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
+	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
 
 	for (q = ngx_queue_head(&conf->ssl);
 		q != ngx_queue_sentinel(&conf->ssl);
@@ -249,18 +253,10 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		switch (ssl_ctx->nid) {
 			case NID_sha1WithRSAEncryption:
 				conf->ssl_rsa = ssl_ctx->ssl;
-				continue;
+				break;
 			case NID_sha256WithRSAEncryption:
 				conf->ssl_rsa_sha256 = ssl_ctx->ssl;
-				continue;
-		}
-
-		if (ssl_ctx->curve_nid && !sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
-			prev_q = ngx_queue_prev(q);
-			ngx_queue_remove(q);
-			q = prev_q;
-
-			ngx_pfree(cf->cycle->pool, ssl_ctx);
+				break;
 		}
 	}
 
@@ -377,6 +373,10 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 					ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
 						"invalid ec group type");
 					return NULL;
+			}
+
+			if (!sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
+				return ssl;
 			}
 
 			break;
