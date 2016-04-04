@@ -33,10 +33,9 @@ typedef struct {
 typedef struct {
 	ngx_conf_post_handler_pt post_handler;
 
-	ngx_uint_t conf_offset;
-	ngx_module_t *module;
-	ngx_uint_t field_offset;
-} ngx_conf_set_first_str_array_post_t;
+	ngx_uint_t multicert_offset;
+	ngx_uint_t ssl_offset;
+} set_first_to_ssl_conf_post_st;
 
 typedef struct {
 	int nid;
@@ -50,7 +49,7 @@ typedef struct {
 static void *create_srv_conf(ngx_conf_t *cf);
 static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void *data);
+static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data);
 
 static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl);
 
@@ -64,16 +63,14 @@ static int g_ssl_ctx_exdata_srv_data_index = -1;
 
 static ngx_str_t ngx_http_ssl_sess_id_ctx = ngx_string("HTTP");
 
-static ngx_conf_set_first_str_array_post_t ssl_multicert_post =
-	{ ngx_conf_set_first_str_array_slot,
-	  NGX_HTTP_SRV_CONF_OFFSET,
-	  &ngx_http_ssl_module,
+static set_first_to_ssl_conf_post_st ssl_multicert_post =
+	{ set_first_to_ssl_conf,
+	  offsetof(srv_conf_t, certificate),
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate) };
 
-static ngx_conf_set_first_str_array_post_t ssl_multicert_key_post =
-	{ ngx_conf_set_first_str_array_slot,
-	  NGX_HTTP_SRV_CONF_OFFSET,
-	  &ngx_http_ssl_module,
+static set_first_to_ssl_conf_post_st ssl_multicert_key_post =
+	{ set_first_to_ssl_conf,
+	  offsetof(srv_conf_t, certificate_key),
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate_key) };
 
 static ngx_command_t module_commands[] = {
@@ -317,20 +314,31 @@ static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two)
 	return 0;
 }
 
-static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void *data)
+static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data)
 {
-	ngx_conf_set_first_str_array_post_t *p = post;
-	ngx_str_t *s = data;
-	void **conf;
-	ngx_str_t *a;
+	set_first_to_ssl_conf_post_st *p = post;
+	srv_conf_t *conf_multicert;
+	ngx_http_ssl_srv_conf_t *conf_ssl;
+	ngx_array_t *arr;
+	ngx_str_t *s = data, *str;
 
-	conf = *(void ***)((char *)cf->ctx + p->conf_offset);
-	a = (ngx_str_t *)((char *)conf[p->module->ctx_index] + p->field_offset);
+	conf_multicert = ngx_http_conf_get_module_srv_conf(cf, ngx_http_multicert_module);
+	arr = *(ngx_array_t **)((char *)conf_multicert + p->multicert_offset);
 
-	if (!a->data) {
-		*a = *s;
+	if (arr->nelts != 1) {
+		return NGX_CONF_OK;
 	}
 
+	conf_ssl = ngx_http_conf_get_module_srv_conf(cf, ngx_http_ssl_module);
+	str = (ngx_str_t *)((char *)conf_ssl + p->ssl_offset);
+
+	if (str->data) {
+		ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+			"ssl_certificate* and ssl_multicert* cannot be used together");
+		return NGX_CONF_ERROR;
+	}
+
+	*str = *s;
 	return NGX_CONF_OK;
 }
 
