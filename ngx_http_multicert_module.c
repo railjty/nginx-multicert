@@ -172,21 +172,6 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		return NGX_CONF_ERROR;
 	}
 
-	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
-	if (!conf->ecdsa_ciphers) {
-		return NGX_CONF_ERROR;
-	}
-
-	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
-		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
-		if (SSL_CIPHER_is_ECDSA(cipher)
-			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
-			return NGX_CONF_ERROR;
-		}
-	}
-
-	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
-
 	ngx_queue_init(&conf->ssl);
 
 	if (!set_conf_ssl_for_ctx(cf, conf, &ssl->ssl)) {
@@ -233,11 +218,6 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			return NGX_CONF_ERROR;
 		}
 		cln->data = new_ssl_ptr;
-
-		if (new_ssl_ptr == &new_ssl) {
-			ngx_ssl_cleanup_ctx(&new_ssl);
-			cln->handler = NULL;
-		}
 	}
 
 	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
@@ -262,6 +242,21 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			break;
 		}
 	}
+
+	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
+	if (!conf->ecdsa_ciphers) {
+		return NGX_CONF_ERROR;
+	}
+
+	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
+		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
+		if (SSL_CIPHER_is_ECDSA(cipher)
+			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
+			return NGX_CONF_ERROR;
+		}
+	}
+
+	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
 
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
@@ -387,10 +382,6 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 					ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
 						"invalid ec group type");
 					return NULL;
-			}
-
-			if (!sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
-				return ssl;
 			}
 
 			break;
