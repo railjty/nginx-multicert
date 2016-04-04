@@ -13,6 +13,11 @@
 #include <ngx_keyless_module.h>
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
+/* taken from boringssl-1e4ae00/ssl/internal.h */
+#define SSL_CURVE_SECP256R1 23
+#define SSL_CURVE_SECP384R1 24
+#define SSL_CURVE_SECP521R1 25
+
 typedef struct {
 	ngx_array_t *certificate;
 	ngx_array_t *certificate_key;
@@ -21,9 +26,15 @@ typedef struct {
 	ngx_ssl_t ssl_rsa_sha256;
 	ngx_ssl_t ssl_rsa_sha384;
 	ngx_ssl_t ssl_rsa_sha512;
-	ngx_ssl_t ssl_ecdsa_sha256;
-	ngx_ssl_t ssl_ecdsa_sha384;
-	ngx_ssl_t ssl_ecdsa_sha512;
+	ngx_ssl_t ssl_ecdsa_sha256_secp256r1;
+	ngx_ssl_t ssl_ecdsa_sha384_secp256r1;
+	ngx_ssl_t ssl_ecdsa_sha512_secp256r1;
+	ngx_ssl_t ssl_ecdsa_sha256_secp384r1;
+	ngx_ssl_t ssl_ecdsa_sha384_secp384r1;
+	ngx_ssl_t ssl_ecdsa_sha512_secp384r1;
+	ngx_ssl_t ssl_ecdsa_sha256_secp521r1;
+	ngx_ssl_t ssl_ecdsa_sha384_secp521r1;
+	ngx_ssl_t ssl_ecdsa_sha512_secp521r1;
 
 	STACK_OF(SSL_CIPHER) *ecdsa_ciphers;
 } srv_conf_t;
@@ -38,27 +49,54 @@ typedef struct {
 
 typedef struct {
 	int nid;
+	int ec_curve_nid;
 	size_t offset;
 } ssl_cert_sig_nid_st;
 
 static const ssl_cert_sig_nid_st kCertSigNIDs[] = {
 	{ NID_md5WithRSAEncryption,
+	  NID_undef,
 	  offsetof(srv_conf_t, ssl_rsa) },
 	{ NID_sha1WithRSAEncryption,
+	  NID_undef,
 	  offsetof(srv_conf_t, ssl_rsa) },
 	{ NID_sha256WithRSAEncryption,
+	  NID_undef,
 	  offsetof(srv_conf_t, ssl_rsa_sha256) },
 	{ NID_sha384WithRSAEncryption,
+	  NID_undef,
 	  offsetof(srv_conf_t, ssl_rsa_sha384) },
 	{ NID_sha512WithRSAEncryption,
+	  NID_undef,
 	  offsetof(srv_conf_t, ssl_rsa_sha512) },
 	{ NID_ecdsa_with_SHA256,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha256) },
+	  NID_X9_62_prime256v1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp256r1) },
 	{ NID_ecdsa_with_SHA384,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha384) },
+	  NID_X9_62_prime256v1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp256r1) },
 	{ NID_ecdsa_with_SHA512,
-	  offsetof(srv_conf_t, ssl_ecdsa_sha512) },
-	{ NID_undef, 0 }
+	  NID_X9_62_prime256v1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp256r1) },
+	{ NID_ecdsa_with_SHA256,
+	  NID_secp384r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp384r1) },
+	{ NID_ecdsa_with_SHA384,
+	  NID_secp384r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp384r1) },
+	{ NID_ecdsa_with_SHA512,
+	  NID_secp384r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp384r1) },
+	{ NID_ecdsa_with_SHA256,
+	  NID_secp521r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha256_secp521r1) },
+	{ NID_ecdsa_with_SHA384,
+	  NID_secp521r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha384_secp521r1) },
+	{ NID_ecdsa_with_SHA512,
+	  NID_secp521r1,
+	  offsetof(srv_conf_t, ssl_ecdsa_sha512_secp521r1) },
+	{ NID_undef, NID_undef, 0 }
 };
 
 static void *create_srv_conf(ngx_conf_t *cf);
@@ -285,7 +323,9 @@ static char *ngx_conf_set_first_str_array_slot(ngx_conf_t *cf, void *post, void 
 static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl)
 {
 	X509 *cert;
-	int nid;
+	EVP_PKEY *pkey;
+	const EC_KEY *ec_key;
+	int nid, curve_nid = NID_undef;
 	size_t i;
 	ngx_ssl_t *conf_ssl;
 
@@ -296,8 +336,19 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 
 	nid = X509_get_signature_nid(cert);
 
+	pkey = X509_get_pubkey(cert);
+	if (pkey) {
+		ec_key = EVP_PKEY_get0_EC_KEY(pkey);
+		if (ec_key) {
+			curve_nid = EC_GROUP_get_curve_name(EC_KEY_get0_group(ec_key));
+		}
+
+		EVP_PKEY_free(pkey);
+	}
+
 	for (i = 0; kCertSigNIDs[i].nid != NID_undef; i++) {
-		if (nid != kCertSigNIDs[i].nid) {
+		if (nid != kCertSigNIDs[i].nid
+			|| curve_nid != kCertSigNIDs[i].ec_curve_nid) {
 			continue;
 		}
 
@@ -311,21 +362,22 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 		return conf_ssl;
 	}
 
-	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate signature algorithm");
+	ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "invalid certificate signature algorithm or ec curve");
 	return NULL;
 }
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 {
 	srv_conf_t *conf;
-	const uint8_t *sig_algs_ptr, *dummy;
-	size_t sig_algs_len, len;
-	CBS cipher_suites, sig_algs, supported_sig_algs;
+	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *dummy;
+	size_t sig_algs_len, ec_curves_len, len;
+	CBS cipher_suites, sig_algs, supported_sig_algs, ec_curves, supported_ec_curves;
 	int can_ecdsa = 0, has_ecdsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
-		has_sha512_rsa, has_sha512_ecdsa;
-	uint16_t cipher_suite;
+		has_sha512_rsa, has_sha512_ecdsa,
+		has_secp256r1, has_secp384r1, has_secp521r1;
+	uint16_t cipher_suite, ec_curve;
 	uint8_t hash, sign;
 	ngx_ssl_t *new_ssl = NULL;
 	X509 *cert;
@@ -336,7 +388,15 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
 
-	if ((conf->ssl_ecdsa_sha256.ctx || conf->ssl_ecdsa_sha384.ctx || conf->ssl_ecdsa_sha512.ctx)
+	if ((conf->ssl_ecdsa_sha256_secp256r1.ctx
+			|| conf->ssl_ecdsa_sha384_secp256r1.ctx
+			|| conf->ssl_ecdsa_sha512_secp256r1.ctx
+			|| conf->ssl_ecdsa_sha256_secp384r1.ctx
+			|| conf->ssl_ecdsa_sha384_secp384r1.ctx
+			|| conf->ssl_ecdsa_sha512_secp384r1.ctx
+			|| conf->ssl_ecdsa_sha256_secp521r1.ctx
+			|| conf->ssl_ecdsa_sha384_secp521r1.ctx
+			|| conf->ssl_ecdsa_sha512_secp521r1.ctx)
 		&& sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
 		can_ecdsa = 1;
 	}
@@ -348,6 +408,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		has_sha256_rsa = has_sha256_ecdsa = 0;
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
+		has_secp256r1 = has_secp384r1 = has_secp521r1 = 0;
 
 		CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
 
@@ -413,12 +474,78 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 		}
 
-		if (conf->ssl_ecdsa_sha512.ctx && has_ecdsa && has_sha512_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha512;
-		} else if (conf->ssl_ecdsa_sha384.ctx && has_ecdsa && has_sha384_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha384;
-		} else if (conf->ssl_ecdsa_sha256.ctx && has_ecdsa && has_sha256_ecdsa) {
-			new_ssl = &conf->ssl_ecdsa_sha256;
+		if (can_ecdsa && has_ecdsa
+			&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_elliptic_curves,
+				&ec_curves_ptr, &ec_curves_len)) {
+			CBS_init(&ec_curves, ec_curves_ptr, ec_curves_len);
+
+			if (!CBS_get_u16_length_prefixed(&ec_curves, &supported_ec_curves)
+				|| CBS_len(&ec_curves) != 0
+				|| CBS_len(&supported_ec_curves) == 0) {
+				return -1;
+			}
+
+			if (CBS_len(&supported_ec_curves) % 2 != 0) {
+				return -1;
+			}
+
+			while (CBS_len(&supported_ec_curves) != 0) {
+				if (!CBS_get_u16(&supported_ec_curves, &ec_curve)) {
+					return -1;
+				}
+
+				switch (ec_curve) {
+					case SSL_CURVE_SECP256R1:
+						has_secp256r1 = 1;
+						break;
+					case SSL_CURVE_SECP384R1:
+						has_secp384r1 = 1;
+						break;
+					case SSL_CURVE_SECP521R1:
+						has_secp521r1 = 1;
+						break;
+					default:
+						continue;
+				}
+
+				if (has_secp256r1 && has_secp384r1 && has_secp521r1) {
+					break;
+				}
+			}
+		} else if (can_ecdsa && has_ecdsa) {
+			/* Clients are not required to send a supported_curves extension. In this
+			 * case, the server is free to pick any curve it likes. See RFC 4492,
+			 * section 4, paragraph 3. */
+			has_secp256r1 = 1;
+		}
+
+		if (conf->ssl_ecdsa_sha512_secp521r1.ctx && has_ecdsa && has_sha512_ecdsa
+			&& has_secp521r1) {
+			new_ssl = &conf->ssl_ecdsa_sha512_secp521r1;
+		} else if (conf->ssl_ecdsa_sha384_secp521r1.ctx && has_ecdsa && has_sha384_ecdsa
+			&& has_secp521r1) {
+			new_ssl = &conf->ssl_ecdsa_sha384_secp521r1;
+		} else if (conf->ssl_ecdsa_sha256_secp521r1.ctx && has_ecdsa && has_sha256_ecdsa
+			& has_secp521r1) {
+			new_ssl = &conf->ssl_ecdsa_sha256_secp521r1;
+		} else if (conf->ssl_ecdsa_sha512_secp384r1.ctx && has_ecdsa && has_sha512_ecdsa
+			&& has_secp384r1) {
+			new_ssl = &conf->ssl_ecdsa_sha512_secp384r1;
+		} else if (conf->ssl_ecdsa_sha384_secp384r1.ctx && has_ecdsa && has_sha384_ecdsa
+			&& has_secp384r1) {
+			new_ssl = &conf->ssl_ecdsa_sha384_secp384r1;
+		} else if (conf->ssl_ecdsa_sha256_secp384r1.ctx && has_ecdsa && has_sha256_ecdsa
+			&& has_secp384r1) {
+			new_ssl = &conf->ssl_ecdsa_sha256_secp384r1;
+		} else if (conf->ssl_ecdsa_sha512_secp256r1.ctx && has_ecdsa && has_sha512_ecdsa
+			&& has_secp256r1) {
+			new_ssl = &conf->ssl_ecdsa_sha512_secp256r1;
+		} else if (conf->ssl_ecdsa_sha384_secp256r1.ctx && has_ecdsa && has_sha384_ecdsa
+			&& has_secp256r1) {
+			new_ssl = &conf->ssl_ecdsa_sha384_secp256r1;
+		} else if (conf->ssl_ecdsa_sha256_secp256r1.ctx && has_ecdsa && has_sha256_ecdsa
+			&& has_secp256r1) {
+			new_ssl = &conf->ssl_ecdsa_sha256_secp256r1;
 		} else if (conf->ssl_rsa_sha512.ctx && has_sha512_rsa) {
 			new_ssl = &conf->ssl_rsa_sha512;
 		} else if (conf->ssl_rsa_sha384.ctx && has_sha384_rsa) {
