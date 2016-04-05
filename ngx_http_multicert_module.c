@@ -26,8 +26,6 @@ typedef struct {
 
 	ngx_ssl_t ssl_rsa;
 	ngx_ssl_t ssl_rsa_sha256;
-
-	STACK_OF(SSL_CIPHER) *ecdsa_ciphers;
 } srv_conf_t;
 
 typedef struct {
@@ -54,8 +52,6 @@ static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data);
 static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl_t *ssl);
 
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
-
-static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b);
 
 static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two);
 
@@ -145,7 +141,6 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	ngx_ssl_t new_ssl, *new_ssl_ptr;
 	size_t i;
 	ngx_pool_cleanup_t *cln;
-	const SSL_CIPHER *cipher;
 	ngx_queue_t *q;
 	ssl_ctx_st *ssl_ctx;
 #ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
@@ -242,21 +237,6 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			break;
 		}
 	}
-
-	conf->ecdsa_ciphers = sk_SSL_CIPHER_new(ssl_cipher_ptr_id_cmp);
-	if (!conf->ecdsa_ciphers) {
-		return NGX_CONF_ERROR;
-	}
-
-	for (i = 0; i < sk_SSL_CIPHER_num(ssl->ssl.ctx->cipher_list->ciphers); i++) {
-		cipher = sk_SSL_CIPHER_value(ssl->ssl.ctx->cipher_list->ciphers, i);
-		if (SSL_CIPHER_is_ECDSA(cipher)
-			&& !sk_SSL_CIPHER_push(conf->ecdsa_ciphers, cipher)) {
-			return NGX_CONF_ERROR;
-		}
-	}
-
-	sk_SSL_CIPHER_sort(conf->ecdsa_ciphers);
 
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
@@ -497,8 +477,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 			}
 		}
 
-		if ((has_sha256_ecdsa || has_sha384_ecdsa || has_sha512_ecdsa)
-			&& sk_SSL_CIPHER_num(conf->ecdsa_ciphers)) {
+		if (has_sha256_ecdsa || has_sha384_ecdsa || has_sha512_ecdsa) {
 			CBS_init(&cipher_suites, ctx->cipher_suites, ctx->cipher_suites_len);
 
 			while (CBS_len(&cipher_suites) != 0) {
@@ -508,7 +487,8 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 				cipher = SSL_get_cipher_by_value(cipher_suite);
 				if (cipher && SSL_CIPHER_is_ECDSA(cipher)
-					&& sk_SSL_CIPHER_find(conf->ecdsa_ciphers, NULL, cipher)) {
+					&& sk_SSL_CIPHER_find(ctx->ssl->ctx->cipher_list_by_id,
+						NULL, cipher)) {
 					has_ecdsa = 1;
 					break;
 				}
@@ -635,18 +615,4 @@ set_ssl:
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
 	return 1;
-}
-
-static int ssl_cipher_ptr_id_cmp(const SSL_CIPHER **in_a, const SSL_CIPHER **in_b)
-{
-	const SSL_CIPHER *a = *in_a;
-	const SSL_CIPHER *b = *in_b;
-
-	if (a->id > b->id) {
-		return 1;
-	} else if (a->id < b->id) {
-		return -1;
-	} else {
-		return 0;
-	}
 }
