@@ -400,13 +400,13 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 {
 	srv_conf_t *conf;
-	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *server_name = NULL;
+	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *server_name;
 	char *old_server_name;
 	size_t sig_algs_len, ec_curves_len, server_name_len;
 	CBS cipher_suites, extension, server_name_list, host_name,
 		sig_algs, supported_sig_algs,
 		ec_curves, supported_ec_curves;
-	int has_ecdsa, has_sha1_rsa,
+	int has_server_name, has_ecdsa, has_sha1_rsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa,
@@ -422,8 +422,9 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	ngx_queue_t *q;
 	ssl_ctx_st *ssl_ctx;
 
-	if (SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
-			&server_name, &server_name_len)) {
+	has_server_name = SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
+		&server_name, &server_name_len);
+	if (has_server_name) {
 		CBS_init(&extension, server_name, server_name_len);
 
 		if (!CBS_get_u16_length_prefixed(&extension, &server_name_list)
@@ -616,7 +617,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		return 1;
 	}
 
-	if (conf->ssl_rsa_sha256.ctx && server_name) {
+	if (conf->ssl_rsa_sha256.ctx && has_server_name) {
 		new_ssl = &conf->ssl_rsa_sha256;
 	} else if (conf->ssl_rsa.ctx) {
 		new_ssl = &conf->ssl_rsa;
