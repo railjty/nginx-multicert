@@ -1,0 +1,108 @@
+diff -rupN a/include/openssl/ssl.h b/include/openssl/ssl.h
+--- a/include/openssl/ssl.h	2016-03-29 21:14:01.000000000 +1030
++++ b/include/openssl/ssl.h	2016-04-05 13:01:55.721501518 +0930
+@@ -197,6 +197,10 @@ OPENSSL_EXPORT SSL_CTX *SSL_CTX_new(cons
+ /* SSL_CTX_free releases memory associated with |ctx|. */
+ OPENSSL_EXPORT void SSL_CTX_free(SSL_CTX *ctx);
+ 
++/* SSL_CTX_dup makes a copy of |ctx|. It returns the new ctx on success or NULL
++ * on error. */
++OPENSSL_EXPORT SSL_CTX *SSL_CTX_dup(const SSL_CTX *ctx);
++
+ 
+ /* SSL connections.
+  *
+diff -rupN a/ssl/ssl_lib.c b/ssl/ssl_lib.c
+--- a/ssl/ssl_lib.c	2016-03-29 21:14:01.000000000 +1030
++++ b/ssl/ssl_lib.c	2016-04-05 13:32:17.478535123 +0930
+@@ -351,6 +351,90 @@ void SSL_CTX_free(SSL_CTX *ctx) {
+   OPENSSL_free(ctx);
+ }
+ 
++OPENSSL_EXPORT SSL_CTX *SSL_CTX_dup(const SSL_CTX *ctx) {
++  SSL_CTX *ret = NULL;
++
++  if (ctx == NULL) {
++    OPENSSL_PUT_ERROR(SSL, SSL_R_NULL_SSL_METHOD_PASSED);
++    return NULL;
++  }
++
++  if (SSL_get_ex_data_X509_STORE_CTX_idx() < 0) {
++    OPENSSL_PUT_ERROR(SSL, SSL_R_X509_VERIFICATION_SETUP_PROBLEMS);
++    goto err;
++  }
++
++  ret = OPENSSL_malloc(sizeof(SSL_CTX));
++  if (ret == NULL) {
++    goto err;
++  }
++
++  *ret = *ctx;
++
++  CRYPTO_MUTEX_cleanup(&ret->lock);
++  CRYPTO_MUTEX_init(&ret->lock);
++
++  ret->references = 1;
++
++  ret->cert = ssl_cert_dup(ctx->cert);
++  if (ret->cert == NULL) {
++    goto err;
++  }
++
++  ret->sessions = lh_SSL_SESSION_new(ssl_session_hash, ssl_session_cmp);
++  if (ret->sessions == NULL) {
++    goto err;
++  }
++  ret->cert_store = ctx->cert_store;
++  X509_STORE_up_ref(ret->cert_store);
++  /*ret->cert_store = X509_STORE_new();
++  if (ret->cert_store == NULL) {
++    goto err;
++  }
++  sk_X509_OBJECT_free(ret->cert_store->objs);
++  ret->cert_store->objs = sk_X509_OBJECT_dup(ctx->cert_store->objs);
++  if (ret->cert_store->objs == NULL)
++      goto err;
++  ret->cert_store->cache = ctx->cert_store->cache;
++  ret->cert_store->get_cert_methods = sk_X509_LOOKUP_dup(ctx->cert_store->get_cert_methods);
++  if (ret->cert_store->get_cert_methods == NULL)
++      goto err;*/
++
++  ret->cipher_list = OPENSSL_malloc(sizeof(struct ssl_cipher_preference_list_st));
++  if (!ret->cipher_list) {
++    goto err;
++  }
++  ret->cipher_list->ciphers = sk_SSL_CIPHER_dup(ctx->cipher_list->ciphers);
++  ret->cipher_list->in_group_flags
++    = OPENSSL_malloc(sk_SSL_CIPHER_num(ret->cipher_list->ciphers));
++  if (!ret->cipher_list->in_group_flags) {
++    goto err;
++  }
++  memcpy(ret->cipher_list->in_group_flags, ctx->cipher_list->in_group_flags,
++         sk_SSL_CIPHER_num(ret->cipher_list->ciphers));
++  ret->cipher_list_by_id = sk_SSL_CIPHER_dup(ctx->cipher_list_by_id);
++
++  // fix
++  /*ret->param = X509_VERIFY_PARAM_new();
++  if (!ret->param) {
++    goto err;
++  }*/
++
++  ret->client_CA = sk_X509_NAME_dup(ctx->client_CA);
++  if (ret->client_CA == NULL) {
++    goto err;
++  }
++
++  CRYPTO_dup_ex_data(&g_ex_data_class_ssl_ctx, &ret->ex_data, &ctx->ex_data);
++
++  return ret;
++
++err:
++  OPENSSL_PUT_ERROR(SSL, ERR_R_MALLOC_FAILURE);
++  SSL_CTX_free(ret);
++  return NULL;
++}
++
+ SSL *SSL_new(SSL_CTX *ctx) {
+   if (ctx == NULL) {
+     OPENSSL_PUT_ERROR(SSL, SSL_R_NULL_SSL_CTX);
