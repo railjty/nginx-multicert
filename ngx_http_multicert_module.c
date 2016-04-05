@@ -238,6 +238,8 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		}
 	}
 
+	SSL_CTX_set_tlsext_servername_callback(ssl->ssl.ctx, NULL);
+
 	if (g_ssl_ctx_exdata_srv_data_index == -1) {
 		g_ssl_ctx_exdata_srv_data_index = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
 		if (g_ssl_ctx_exdata_srv_data_index == -1) {
@@ -398,16 +400,19 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 {
 	srv_conf_t *conf;
-	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *dummy;
-	size_t sig_algs_len, ec_curves_len, len;
-	CBS cipher_suites, sig_algs, supported_sig_algs, ec_curves, supported_ec_curves;
+	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *server_name = NULL;
+	char *old_server_name;
+	size_t sig_algs_len, ec_curves_len, server_name_len;
+	CBS cipher_suites, extension, server_name_list, host_name,
+		sig_algs, supported_sig_algs,
+		ec_curves, supported_ec_curves;
 	int has_ecdsa, has_sha1_rsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa,
 		has_secp256r1, has_secp384r1, has_secp521r1;
 	uint16_t cipher_suite, ec_curve;
-	uint8_t hash, sign;
+	uint8_t hash, sign, name_type;
 	ngx_ssl_t *new_ssl = NULL;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
@@ -417,7 +422,54 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	ngx_queue_t *q;
 	ssl_ctx_st *ssl_ctx;
 
+	if (SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
+			&server_name, &server_name_len)) {
+		CBS_init(&extension, server_name, server_name_len);
+
+		if (!CBS_get_u16_length_prefixed(&extension, &server_name_list)
+			|| CBS_len(&server_name_list) == 0
+			|| CBS_len(&extension) != 0) {
+			return -1;
+		}
+
+		while (CBS_len(&server_name_list) > 0) {
+			if (!CBS_get_u8(&server_name_list, &name_type)
+				|| !CBS_get_u16_length_prefixed(&server_name_list, &host_name)) {
+				return -1;
+			}
+
+			if (name_type != TLSEXT_NAMETYPE_host_name) {
+				continue;
+			}
+
+			if (CBS_len(&host_name) == 0
+				|| CBS_len(&host_name) > TLSEXT_MAXLEN_host_name
+				|| CBS_contains_zero_byte(&host_name)) {
+				return -1;
+			}
+
+			old_server_name = ctx->ssl->tlsext_hostname;
+
+			if (!CBS_strdup(&host_name, &ctx->ssl->tlsext_hostname)) {
+				return -1;
+			}
+
+			switch (ngx_http_ssl_servername(ctx->ssl, NULL, NULL)) {
+				case SSL_TLSEXT_ERR_NOACK:
+					ctx->ssl->s3->tmp.should_ack_sni = 0;
+					break;
+			}
+
+			OPENSSL_free(ctx->ssl->tlsext_hostname);
+			ctx->ssl->tlsext_hostname = old_server_name;
+			break;
+		}
+	}
+
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
+	if (!conf) {
+		return 1;
+	}
 
 	if (!ngx_queue_empty(&conf->ssl) && SSL_early_callback_ctx_extension_get(ctx,
 			TLSEXT_TYPE_signature_algorithms, &sig_algs_ptr, &sig_algs_len)) {
@@ -564,8 +616,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		return 1;
 	}
 
-	if (conf->ssl_rsa_sha256.ctx
-		&& SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name, &dummy, &len)) {
+	if (conf->ssl_rsa_sha256.ctx && server_name) {
 		new_ssl = &conf->ssl_rsa_sha256;
 	} else if (conf->ssl_rsa.ctx) {
 		new_ssl = &conf->ssl_rsa;
