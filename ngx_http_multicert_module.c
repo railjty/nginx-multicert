@@ -400,20 +400,17 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, ngx_ssl
 static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 {
 	srv_conf_t *conf;
-	const uint8_t *sig_algs_ptr, *ec_curves_ptr, *server_name;
-	char *old_server_name;
-	size_t sig_algs_len, ec_curves_len, server_name_len;
-	CBS cipher_suites, extension, server_name_list, host_name,
-		sig_algs, supported_sig_algs,
-		ec_curves, supported_ec_curves;
+	const uint8_t *extension_data;
+	size_t extension_len;
+	CBS extension, cipher_suites, server_name_list, host_name, sig_algs, ec_curves;
 	int has_server_name, has_ecdsa, has_sha1_rsa,
 		has_sha256_rsa, has_sha256_ecdsa,
 		has_sha384_rsa, has_sha384_ecdsa,
 		has_sha512_rsa, has_sha512_ecdsa,
 		has_secp256r1, has_secp384r1, has_secp521r1;
 	uint16_t cipher_suite, ec_curve;
-	uint8_t hash, sign, name_type;
-	ngx_ssl_t *new_ssl = NULL;
+	uint8_t name_type, hash, sign;
+	ngx_ssl_t *new_ssl;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
 	EVP_PKEY *pkey;
@@ -423,9 +420,9 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	ssl_ctx_st *ssl_ctx;
 
 	has_server_name = SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
-		&server_name, &server_name_len);
+		&extension_data, &extension_len);
 	if (has_server_name) {
-		CBS_init(&extension, server_name, server_name_len);
+		CBS_init(&extension, extension_data, extension_len);
 
 		if (!CBS_get_u16_length_prefixed(&extension, &server_name_list)
 			|| CBS_len(&server_name_list) == 0
@@ -445,24 +442,17 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 
 			if (CBS_len(&host_name) == 0
 				|| CBS_len(&host_name) > TLSEXT_MAXLEN_host_name
-				|| CBS_contains_zero_byte(&host_name)) {
+				|| CBS_contains_zero_byte(&host_name)
+				|| !CBS_strdup(&host_name, &ctx->ssl->tlsext_hostname)) {
 				return -1;
 			}
 
-			old_server_name = ctx->ssl->tlsext_hostname;
-
-			if (!CBS_strdup(&host_name, &ctx->ssl->tlsext_hostname)) {
-				return -1;
-			}
-
-			switch (ngx_http_ssl_servername(ctx->ssl, NULL, NULL)) {
-				case SSL_TLSEXT_ERR_NOACK:
-					ctx->ssl->s3->tmp.should_ack_sni = 0;
-					break;
+			if (ngx_http_ssl_servername(ctx->ssl, NULL, NULL) == SSL_TLSEXT_ERR_NOACK) {
+				ctx->ssl->s3->tmp.should_ack_sni = 0;
 			}
 
 			OPENSSL_free(ctx->ssl->tlsext_hostname);
-			ctx->ssl->tlsext_hostname = old_server_name;
+			ctx->ssl->tlsext_hostname = NULL;
 			break;
 		}
 	}
@@ -473,28 +463,28 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	}
 
 	if (!ngx_queue_empty(&conf->ssl) && SSL_early_callback_ctx_extension_get(ctx,
-			TLSEXT_TYPE_signature_algorithms, &sig_algs_ptr, &sig_algs_len)) {
+			TLSEXT_TYPE_signature_algorithms, &extension_data, &extension_len)) {
 		has_ecdsa = has_sha1_rsa = 0;
 		has_sha256_rsa = has_sha256_ecdsa = 0;
 		has_sha384_rsa = has_sha384_ecdsa = 0;
 		has_sha512_rsa = has_sha512_ecdsa = 0;
 		has_secp256r1 = has_secp384r1 = has_secp521r1 = 0;
 
-		CBS_init(&sig_algs, sig_algs_ptr, sig_algs_len);
+		CBS_init(&extension, extension_data, extension_len);
 
-		if (!CBS_get_u16_length_prefixed(&sig_algs, &supported_sig_algs)
-			|| CBS_len(&sig_algs) != 0
-			|| CBS_len(&supported_sig_algs) == 0) {
+		if (!CBS_get_u16_length_prefixed(&extension, &sig_algs)
+			|| CBS_len(&sig_algs) == 0
+			|| CBS_len(&extension) != 0) {
 			return -1;
 		}
 
-		if (CBS_len(&supported_sig_algs) % 2 != 0) {
+		if (CBS_len(&sig_algs) % 2 != 0) {
 			return -1;
 		}
 
-		while (CBS_len(&supported_sig_algs) != 0) {
-			if (!CBS_get_u8(&supported_sig_algs, &hash)
-				|| !CBS_get_u8(&supported_sig_algs, &sign)) {
+		while (CBS_len(&sig_algs) != 0) {
+			if (!CBS_get_u8(&sig_algs, &hash)
+				|| !CBS_get_u8(&sig_algs, &sign)) {
 				return -1;
 			}
 
@@ -549,21 +539,21 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		}
 
 		if (has_ecdsa && SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_elliptic_curves,
-				&ec_curves_ptr, &ec_curves_len)) {
-			CBS_init(&ec_curves, ec_curves_ptr, ec_curves_len);
+				&extension_data, &extension_len)) {
+			CBS_init(&extension, extension_data, extension_len);
 
-			if (!CBS_get_u16_length_prefixed(&ec_curves, &supported_ec_curves)
-				|| CBS_len(&ec_curves) != 0
-				|| CBS_len(&supported_ec_curves) == 0) {
+			if (!CBS_get_u16_length_prefixed(&extension, &ec_curves)
+				|| CBS_len(&ec_curves) == 0
+				|| CBS_len(&extension) != 0) {
 				return -1;
 			}
 
-			if (CBS_len(&supported_ec_curves) % 2 != 0) {
+			if (CBS_len(&ec_curves) % 2 != 0) {
 				return -1;
 			}
 
-			while (CBS_len(&supported_ec_curves) != 0) {
-				if (!CBS_get_u16(&supported_ec_curves, &ec_curve)) {
+			while (CBS_len(&ec_curves) != 0) {
+				if (!CBS_get_u16(&ec_curves, &ec_curve)) {
 					return -1;
 				}
 
