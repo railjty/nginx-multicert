@@ -411,14 +411,16 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		has_secp256r1, has_secp384r1, has_secp521r1;
 	uint16_t cipher_suite, ec_curve;
 	uint8_t name_type, hash, sign;
+	const SSL_CIPHER *cipher;
+	const ngx_queue_t *q;
+	const ssl_ctx_st *ssl_ctx;
 	const ngx_ssl_t *new_ssl;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
 	EVP_PKEY *pkey;
+#ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
 	KEYLESS_CTX *keyless;
-	const SSL_CIPHER *cipher;
-	const ngx_queue_t *q;
-	const ssl_ctx_st *ssl_ctx;
+#endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
 	has_server_name = SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
 		&extension_data, &extension_len);
