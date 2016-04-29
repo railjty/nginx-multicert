@@ -410,36 +410,31 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		CBS_init(&extension, extension_data, extension_len);
 
 		if (!CBS_get_u16_length_prefixed(&extension, &server_name_list)
-			|| CBS_len(&server_name_list) == 0
-			|| CBS_len(&extension) != 0) {
+			|| !CBS_get_u8(&server_name_list, &name_type)
+			/* Although the server_name extension was intended to be extensible to
+			 * new name types and multiple names, OpenSSL 1.0.x had a bug which meant
+			 * different name types will cause an error. Further, RFC 4366 originally
+			 * defined syntax inextensibly. RFC 6066 corrected this mistake, but
+			 * adding new name types is no longer feasible.
+			 *
+			 * Act as if the extensibility does not exist to simplify parsing. */
+			|| !CBS_get_u16_length_prefixed(&server_name_list, &host_name)
+			|| CBS_len(&server_name_list) != 0
+			|| CBS_len(&extension) != 0
+			|| name_type != TLSEXT_NAMETYPE_host_name
+			|| CBS_len(&host_name) == 0
+			|| CBS_len(&host_name) > TLSEXT_MAXLEN_host_name
+			|| CBS_contains_zero_byte(&host_name)
+			|| !CBS_strdup(&host_name, &ctx->ssl->tlsext_hostname)) {
 			return -1;
 		}
 
-		while (CBS_len(&server_name_list) > 0) {
-			if (!CBS_get_u8(&server_name_list, &name_type)
-				|| !CBS_get_u16_length_prefixed(&server_name_list, &host_name)) {
-				return -1;
-			}
-
-			if (name_type != TLSEXT_NAMETYPE_host_name) {
-				continue;
-			}
-
-			if (CBS_len(&host_name) == 0
-				|| CBS_len(&host_name) > TLSEXT_MAXLEN_host_name
-				|| CBS_contains_zero_byte(&host_name)
-				|| !CBS_strdup(&host_name, &ctx->ssl->tlsext_hostname)) {
-				return -1;
-			}
-
-			if (ngx_http_ssl_servername(ctx->ssl, NULL, NULL) == SSL_TLSEXT_ERR_NOACK) {
-				ctx->ssl->s3->tmp.should_ack_sni = 0;
-			}
-
-			OPENSSL_free(ctx->ssl->tlsext_hostname);
-			ctx->ssl->tlsext_hostname = NULL;
-			break;
+		if (ngx_http_ssl_servername(ctx->ssl, NULL, NULL) == SSL_TLSEXT_ERR_NOACK) {
+			ctx->ssl->s3->tmp.should_ack_sni = 0;
 		}
+
+		OPENSSL_free(ctx->ssl->tlsext_hostname);
+		ctx->ssl->tlsext_hostname = NULL;
 	}
 
 	conf = SSL_CTX_get_ex_data(ctx->ssl->ctx, g_ssl_ctx_exdata_srv_data_index);
