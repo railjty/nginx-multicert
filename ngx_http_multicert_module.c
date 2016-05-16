@@ -21,14 +21,14 @@ typedef struct {
 
 	ngx_ssl_t ssl_rsa;
 	ngx_ssl_t ssl_rsa_sha256;
-} srv_conf_t;
+} ngx_http_multicert_srv_conf_t;
 
 typedef struct {
 	ngx_conf_post_handler_pt post_handler;
 
 	ngx_uint_t multicert_offset;
 	ngx_uint_t ssl_offset;
-} set_first_to_ssl_conf_post_st;
+} ngx_http_multicert_set_first_to_ssl_conf_post_st;
 
 typedef struct {
 	int nid;
@@ -37,85 +37,86 @@ typedef struct {
 	ngx_ssl_t ssl;
 
 	ngx_queue_t queue;
-} ssl_ctx_st;
+} ngx_http_multicert_ssl_ctx_st;
 
-static void *create_srv_conf(ngx_conf_t *cf);
-static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
+static void *ngx_http_multicert_create_srv_conf(ngx_conf_t *cf);
+static char *ngx_http_multicert_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data);
+static char *ngx_http_multicert_set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data);
 
-static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, const ngx_ssl_t *ssl);
+static ngx_ssl_t *ngx_http_multicert_set_conf_ssl_for_ctx(ngx_conf_t *cf,
+		ngx_http_multicert_srv_conf_t *conf, const ngx_ssl_t *ssl);
 
-static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
+static int ngx_http_multicert_select_certificate_cb(const struct ssl_early_callback_ctx *ctx);
 
-static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two);
+static ngx_int_t ngx_http_multicert_cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two);
 
 static int g_ssl_ctx_exdata_srv_data_index = -1;
 
 static ngx_str_t ngx_http_ssl_sess_id_ctx = ngx_string("HTTP");
 
-static set_first_to_ssl_conf_post_st ssl_multicert_post =
-	{ set_first_to_ssl_conf,
-	  offsetof(srv_conf_t, certificate),
+static ngx_http_multicert_set_first_to_ssl_conf_post_st ngx_http_multicert_ssl_multicert_post =
+	{ ngx_http_multicert_set_first_to_ssl_conf,
+	  offsetof(ngx_http_multicert_srv_conf_t, certificate),
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate) };
 
-static set_first_to_ssl_conf_post_st ssl_multicert_key_post =
-	{ set_first_to_ssl_conf,
-	  offsetof(srv_conf_t, certificate_key),
+static ngx_http_multicert_set_first_to_ssl_conf_post_st ngx_http_multicert_ssl_multicert_key_post =
+	{ ngx_http_multicert_set_first_to_ssl_conf,
+	  offsetof(ngx_http_multicert_srv_conf_t, certificate_key),
 	  offsetof(ngx_http_ssl_srv_conf_t, certificate_key) };
 
-static ngx_command_t module_commands[] = {
+static ngx_command_t ngx_http_multicert_module_commands[] = {
 	{ ngx_string("ssl_multicert"),
 	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
 	  ngx_conf_set_str_array_slot,
 	  NGX_HTTP_SRV_CONF_OFFSET,
-	  offsetof(srv_conf_t, certificate),
-	  &ssl_multicert_post },
+	  offsetof(ngx_http_multicert_srv_conf_t, certificate),
+	  &ngx_http_multicert_ssl_multicert_post },
 
 	{ ngx_string("ssl_multicert_key"),
 	  NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
 	  ngx_conf_set_str_array_slot,
 	  NGX_HTTP_SRV_CONF_OFFSET,
-	  offsetof(srv_conf_t, certificate_key),
-	  &ssl_multicert_key_post },
+	  offsetof(ngx_http_multicert_srv_conf_t, certificate_key),
+	  &ngx_http_multicert_ssl_multicert_key_post },
 
 	ngx_null_command
 };
 
-static ngx_http_module_t module_ctx = {
-	NULL,            /* preconfiguration */
-	NULL,            /* postconfiguration */
+static ngx_http_module_t ngx_http_multicert_module_ctx = {
+	NULL,                               /* preconfiguration */
+	NULL,                               /* postconfiguration */
 
-	NULL,            /* create main configuration */
-	NULL,            /* init main configuration */
+	NULL,                               /* create main configuration */
+	NULL,                               /* init main configuration */
 
-	create_srv_conf, /* create server configuration */
-	merge_srv_conf,  /* merge server configuration */
+	ngx_http_multicert_create_srv_conf, /* create server configuration */
+	ngx_http_multicert_merge_srv_conf,  /* merge server configuration */
 
-	NULL,            /* create location configuration */
-	NULL             /* merge location configuration */
+	NULL,                               /* create location configuration */
+	NULL                                /* merge location configuration */
 };
 
 ngx_module_t ngx_http_multicert_module = {
 	NGX_MODULE_V1,
-	&module_ctx,     /* module context */
-	module_commands, /* module directives */
-	NGX_HTTP_MODULE, /* module type */
-	NULL,            /* init master */
-	NULL,            /* init module */
-	NULL,            /* init process */
-	NULL,            /* init thread */
-	NULL,            /* exit thread */
-	NULL,            /* exit process */
-	NULL,            /* exit master */
+	&ngx_http_multicert_module_ctx,     /* module context */
+	ngx_http_multicert_module_commands, /* module directives */
+	NGX_HTTP_MODULE,                    /* module type */
+	NULL,                               /* init master */
+	NULL,                               /* init module */
+	NULL,                               /* init process */
+	NULL,                               /* init thread */
+	NULL,                               /* exit thread */
+	NULL,                               /* exit process */
+	NULL,                               /* exit master */
 	NGX_MODULE_V1_PADDING
 };
 
-static void *create_srv_conf(ngx_conf_t *cf)
+static void *ngx_http_multicert_create_srv_conf(ngx_conf_t *cf)
 {
-	srv_conf_t *mcscf;
+	ngx_http_multicert_srv_conf_t *mcscf;
 
-	mcscf = ngx_pcalloc(cf->pool, sizeof(srv_conf_t));
+	mcscf = ngx_pcalloc(cf->pool, sizeof(ngx_http_multicert_srv_conf_t));
 	if (!mcscf) {
 		return NULL;
 	}
@@ -126,10 +127,10 @@ static void *create_srv_conf(ngx_conf_t *cf)
 	return mcscf;
 }
 
-static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
+static char *ngx_http_multicert_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 {
-	const srv_conf_t *prev = parent;
-	srv_conf_t *conf = child;
+	const ngx_http_multicert_srv_conf_t *prev = parent;
+	ngx_http_multicert_srv_conf_t *conf = child;
 
 	ngx_http_ssl_srv_conf_t *ssl;
 	ngx_str_t *cert_elt, *key_elt;
@@ -137,7 +138,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 	size_t i;
 	ngx_pool_cleanup_t *cln;
 	const ngx_queue_t *q;
-	const ssl_ctx_st *ssl_ctx;
+	const ngx_http_multicert_ssl_ctx_st *ssl_ctx;
 
 	ngx_conf_merge_ptr_value(conf->certificate, prev->certificate, NULL);
 	ngx_conf_merge_ptr_value(conf->certificate_key, prev->certificate_key, NULL);
@@ -161,7 +162,7 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
 	ngx_queue_init(&conf->ssl);
 
-	if (!set_conf_ssl_for_ctx(cf, conf, &ssl->ssl)) {
+	if (!ngx_http_multicert_set_conf_ssl_for_ctx(cf, conf, &ssl->ssl)) {
 		return NGX_CONF_ERROR;
 	}
 
@@ -190,19 +191,19 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 			return NGX_CONF_ERROR;
 		}
 
-		new_ssl_ptr = set_conf_ssl_for_ctx(cf, conf, &new_ssl);
+		new_ssl_ptr = ngx_http_multicert_set_conf_ssl_for_ctx(cf, conf, &new_ssl);
 		if (!new_ssl_ptr) {
 			return NGX_CONF_ERROR;
 		}
 		cln->data = new_ssl_ptr;
 	}
 
-	ngx_queue_sort(&conf->ssl, cmp_ssl_ctx_st);
+	ngx_queue_sort(&conf->ssl, ngx_http_multicert_cmp_ssl_ctx_st);
 
 	for (q = ngx_queue_last(&conf->ssl);
 		q != ngx_queue_sentinel(&conf->ssl);
 		q = ngx_queue_prev(q)) {
-		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+		ssl_ctx = ngx_queue_data(q, ngx_http_multicert_ssl_ctx_st, queue);
 
 		switch (ssl_ctx->nid) {
 			case NID_sha1WithRSAEncryption:
@@ -235,17 +236,17 @@ static char *merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 		return NGX_CONF_ERROR;
 	}
 
-	SSL_CTX_set_select_certificate_cb(ssl->ssl.ctx, select_certificate_cb);
+	SSL_CTX_set_select_certificate_cb(ssl->ssl.ctx, ngx_http_multicert_select_certificate_cb);
 
 	return NGX_CONF_OK;
 }
 
-static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two)
+static ngx_int_t ngx_http_multicert_cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two)
 {
-	const ssl_ctx_st *a, *b;
+	const ngx_http_multicert_ssl_ctx_st *a, *b;
 
-	a = ngx_queue_data(one, ssl_ctx_st, queue);
-	b = ngx_queue_data(two, ssl_ctx_st, queue);
+	a = ngx_queue_data(one, ngx_http_multicert_ssl_ctx_st, queue);
+	b = ngx_queue_data(two, ngx_http_multicert_ssl_ctx_st, queue);
 
 	/* shift ecdsa keys to the start */
 	if (a->curve_nid && !b->curve_nid) {
@@ -273,10 +274,10 @@ static ngx_int_t cmp_ssl_ctx_st(const ngx_queue_t *one, const ngx_queue_t *two)
 	return 0;
 }
 
-static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data)
+static char *ngx_http_multicert_set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data)
 {
-	const set_first_to_ssl_conf_post_st *p = post;
-	srv_conf_t *conf_multicert;
+	const ngx_http_multicert_set_first_to_ssl_conf_post_st *p = post;
+	ngx_http_multicert_srv_conf_t *conf_multicert;
 	ngx_http_ssl_srv_conf_t *conf_ssl;
 	ngx_array_t *arr;
 	const ngx_str_t *s = data;
@@ -302,14 +303,15 @@ static char *set_first_to_ssl_conf(ngx_conf_t *cf, void *post, void *data)
 	return NGX_CONF_OK;
 }
 
-static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, const ngx_ssl_t *ssl)
+static ngx_ssl_t *ngx_http_multicert_set_conf_ssl_for_ctx(ngx_conf_t *cf,
+		ngx_http_multicert_srv_conf_t *conf, const ngx_ssl_t *ssl)
 {
 	X509 *cert;
 	EVP_PKEY *pkey;
 	const EC_KEY *ec_key;
 	int nid, curve_nid = NID_undef;
 	const ngx_queue_t *q;
-	ssl_ctx_st *ssl_ctx;
+	ngx_http_multicert_ssl_ctx_st *ssl_ctx;
 
 	cert = SSL_CTX_get0_certificate(ssl->ctx);
 	if (!cert) {
@@ -358,7 +360,7 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, const n
 	for (q = ngx_queue_head(&conf->ssl);
 		q != ngx_queue_sentinel(&conf->ssl);
 		q = ngx_queue_next(q)) {
-		ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+		ssl_ctx = ngx_queue_data(q, ngx_http_multicert_ssl_ctx_st, queue);
 
 		if (ssl_ctx->nid == nid && ssl_ctx->curve_nid == curve_nid) {
 			ngx_log_error(NGX_LOG_EMERG, cf->log, 0, "certificate type is duplicate");
@@ -366,7 +368,7 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, const n
 		}
 	}
 
-	ssl_ctx = ngx_pcalloc(cf->cycle->pool, sizeof(ssl_ctx_st));
+	ssl_ctx = ngx_pcalloc(cf->cycle->pool, sizeof(ngx_http_multicert_ssl_ctx_st));
 	if (!ssl_ctx) {
 		return NULL;
 	}
@@ -380,9 +382,9 @@ static ngx_ssl_t *set_conf_ssl_for_ctx(ngx_conf_t *cf, srv_conf_t *conf, const n
 	return &ssl_ctx->ssl;
 }
 
-static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
+static int ngx_http_multicert_select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 {
-	const srv_conf_t *conf;
+	const ngx_http_multicert_srv_conf_t *conf;
 	const uint8_t *extension_data;
 	size_t extension_len;
 	CBS extension, cipher_suites, server_name_list, host_name, sig_algs, ec_curves;
@@ -395,7 +397,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 	uint8_t name_type, hash, sign;
 	const SSL_CIPHER *cipher;
 	const ngx_queue_t *q;
-	const ssl_ctx_st *ssl_ctx;
+	const ngx_http_multicert_ssl_ctx_st *ssl_ctx;
 	const ngx_ssl_t *new_ssl;
 	X509 *cert;
 	STACK_OF(X509) *cert_chain;
@@ -565,7 +567,7 @@ static int select_certificate_cb(const struct ssl_early_callback_ctx *ctx)
 		for (q = ngx_queue_head(&conf->ssl);
 			q != ngx_queue_sentinel(&conf->ssl);
 			q = ngx_queue_next(q)) {
-			ssl_ctx = ngx_queue_data(q, ssl_ctx_st, queue);
+			ssl_ctx = ngx_queue_data(q, ngx_http_multicert_ssl_ctx_st, queue);
 
 			if ((ssl_ctx->nid == NID_sha1WithRSAEncryption && !has_sha1_rsa)
 				|| (ssl_ctx->nid == NID_sha256WithRSAEncryption && !has_sha256_rsa)
