@@ -4,6 +4,9 @@ case "$CORE_MODULES" in
 	*ngx_keyless_module*)
 		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/have
 		;;
+	*)
+		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/nohave
+		;;
 esac
 
 if [ -n "$ngx_module_link" ]; then
