@@ -403,7 +403,7 @@ static int ngx_http_multicert_select_certificate_cb(const struct ssl_early_callb
 	STACK_OF(X509) *cert_chain;
 	EVP_PKEY *pkey;
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
-	KEYLESS_CTX *keyless;
+	NGX_KEYLESS_CTX *keyless;
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
 	has_server_name = SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
@@ -632,8 +632,8 @@ set_ssl:
 
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
 	// Set keyless-nginx
-	keyless = ssl_ctx_get_keyless_ctx(new_ssl->ctx);
-	if (keyless && !keyless_attach_ssl(ctx->ssl, keyless)) {
+	keyless = ngx_keyless_ssl_ctx_get_ctx(new_ssl->ctx);
+	if (keyless && !ngx_keyless_attach_ssl(ctx->ssl, keyless)) {
 		return -1;
 	}
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
