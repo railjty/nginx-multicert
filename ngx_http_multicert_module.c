@@ -4,6 +4,11 @@
 
 #include <assert.h>
 
+#ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
+#include "../ngx_http_lua_common.h"
+#include "../ngx_http_lua_ssl_certby.h"
+#endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
+
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
 #include <ngx_keyless_module.h>
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
@@ -139,6 +144,9 @@ static char *ngx_http_multicert_merge_srv_conf(ngx_conf_t *cf, void *parent, voi
 	ngx_pool_cleanup_t *cln;
 	const ngx_queue_t *q;
 	const ngx_http_multicert_ssl_ctx_st *ssl_ctx;
+#ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
+	const ngx_http_lua_srv_conf_t *lua;
+#endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
 
 	ngx_conf_merge_ptr_value(conf->certificate, prev->certificate, NULL);
 	ngx_conf_merge_ptr_value(conf->certificate_key, prev->certificate_key, NULL);
@@ -166,6 +174,10 @@ static char *ngx_http_multicert_merge_srv_conf(ngx_conf_t *cf, void *parent, voi
 		return NGX_CONF_ERROR;
 	}
 
+#ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
+	lua = ngx_http_conf_get_module_srv_conf(cf, ngx_http_lua_module);
+#endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
+
 	cert_elt = conf->certificate->elts;
 	key_elt = conf->certificate_key->elts;
 	for (i = 1; i < conf->certificate->nelts; i++) {
@@ -190,6 +202,12 @@ static char *ngx_http_multicert_merge_srv_conf(ngx_conf_t *cf, void *parent, voi
 				NULL, ssl->session_timeout) != NGX_OK) {
 			return NGX_CONF_ERROR;
 		}
+
+#ifdef NGX_HTTP_MUTLICERT_HAVE_NGXLUA
+		if (lua && lua->ssl.cert_src.len) {
+			SSL_CTX_set_cert_cb(new_ssl.ctx, ngx_http_lua_ssl_cert_handler, NULL);
+		}
+#endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
 
 		new_ssl_ptr = ngx_http_multicert_set_conf_ssl_for_ctx(cf, conf, &new_ssl);
 		if (!new_ssl_ptr) {
