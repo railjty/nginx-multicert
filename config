@@ -1,10 +1,10 @@
 ngx_addon_name=ngx_multicert
 
-//case "$HTTP_AUX_FILTER_MODULES" in
-//	*ngx_http_lua_module*)
-//		have=NGX_HTTP_MUTLICERT_HAVE_NGXLUA . auto/have
-//		;;
-//esac
+case "$HTTP_AUX_FILTER_MODULES" in
+	*ngx_http_lua_module*)
+		have=NGX_HTTP_MUTLICERT_HAVE_NGXLUA . auto/have
+		;;
+esac
 
 //case "$CORE_MODULES" in
 //	*ngx_keyless_module*)
