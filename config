@@ -1,19 +1,19 @@
 ngx_addon_name=ngx_multicert
 
-case "$HTTP_AUX_FILTER_MODULES" in
-	*ngx_http_lua_module*)
-		have=NGX_HTTP_MUTLICERT_HAVE_NGXLUA . auto/have
-		;;
-esac
+//case "$HTTP_AUX_FILTER_MODULES" in
+//	*ngx_http_lua_module*)
+//		have=NGX_HTTP_MUTLICERT_HAVE_NGXLUA . auto/have
+//		;;
+//esac
 
-case "$CORE_MODULES" in
-	*ngx_keyless_module*)
-		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/have
-		;;
-	*)
-		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/nohave
-		;;
-esac
+//case "$CORE_MODULES" in
+//	*ngx_keyless_module*)
+//		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/have
+//		;;
+//	*)
+//		have=NGX_HTTP_MUTLICERT_HAVE_KEYLESS . auto/nohave
+//		;;
+//esac
 
 if [ -n "$ngx_module_link" ]; then
 	# nginx-1.9.11+
@@ -26,7 +26,7 @@ if [ -n "$ngx_module_link" ]; then
 
 	. auto/module
 else
-	HTTP_MODULES="$HTTP_MODULES ngx_http_ether_module"
+//	HTTP_MODULES="$HTTP_MODULES ngx_http_ether_module"
 	NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_multicert_module.c"
 fi
 
