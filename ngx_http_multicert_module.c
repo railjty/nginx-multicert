@@ -10,13 +10,13 @@
 #endif /* NGX_HTTP_MUTLICERT_HAVE_NGXLUA */
 
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
-//#include <ngx_keyless_module.h>
+#include <ngx_keyless_module.h>
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
 /* taken from boringssl-1e4ae00/ssl/internal.h */
-//#define SSL_CURVE_SECP256R1 23
-//#define SSL_CURVE_SECP384R1 24
-//#define SSL_CURVE_SECP521R1 25
+#define SSL_CURVE_SECP256R1 23
+#define SSL_CURVE_SECP384R1 24
+#define SSL_CURVE_SECP521R1 25
 
 typedef struct {
 	ngx_array_t *certificate;
@@ -421,7 +421,7 @@ static int ngx_http_multicert_select_certificate_cb(const struct ssl_early_callb
 	STACK_OF(X509) *cert_chain;
 	EVP_PKEY *pkey;
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
-	//NGX_KEYLESS_CTX *keyless;
+	NGX_KEYLESS_CTX *keyless;
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
 	has_server_name = SSL_early_callback_ctx_extension_get(ctx, TLSEXT_TYPE_server_name,
@@ -650,9 +650,9 @@ set_ssl:
 
 #ifdef NGX_HTTP_MUTLICERT_HAVE_KEYLESS
 	// Set keyless-nginx
-//	keyless = ngx_keyless_ssl_ctx_get_ctx(new_ssl->ctx);
-//	if (keyless && !ngx_keyless_attach_ssl(ctx->ssl, keyless)) {
-//		return -1;
+	keyless = ngx_keyless_ssl_ctx_get_ctx(new_ssl->ctx);
+	if (keyless && !ngx_keyless_attach_ssl(ctx->ssl, keyless)) {
+		return -1;
 	}
 #endif /* NGX_HTTP_MUTLICERT_HAVE_KEYLESS */
 
